@@ -74,7 +74,7 @@
                         var tranData = JSON.parse(context.values[i]).values;
                         var custId = tranData["GROUP(entity)"].value;
                         var statementDate = getStatementDate();
-                        log.debug('Processing customer', custId);
+                        log.audit('Processing customer', custId);
 
                         var customerRecord = record.load({ type: 'customer', id: custId });
                         var cusObj = buildCustomerObject(customerRecord, custId);
@@ -176,7 +176,7 @@
 
             // (short versions shown here — use your originals)
             function createPDF(cusObj, netAmount, resultsAmount, statementDate, currency) {
-                log.debug('createPDF START', 'netAmount=' + netAmount + ' for currency=' + currency);
+                log.audit('createPDF START', 'netAmount=' + netAmount + ' for currency=' + currency);
                 var currencyObj = loadCurrency(currency);
                 var currencySymbol = currencyObj.symbol;
                 var currencyCode = currencyObj.code;
@@ -190,7 +190,7 @@
                 var state = cusObj.state;
                 var zip = cusObj.zip;
                 var country = cusObj.country;
-                log.debug('createPDF', JSON.stringify(cusObj));
+                log.audit('createPDF', JSON.stringify(cusObj));
 
                 //@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
                 //pdf generate start here
@@ -225,7 +225,7 @@
                 strNamePic += ' ';
                 strNamePic += "</td></tr>";
                 strNamePic += "</table>";
-                //log.debug("strNamePic", strNamePic);
+                //log.audit("strNamePic", strNamePic);
                 var strName = "<table>";
                 strName += "<tr><td>";
                 strName += "</td>";
@@ -439,11 +439,11 @@
 
 
                 var resultsFinal = resultsAmount;
-                log.debug('# of statement lines', 'resultsFinal=' + resultsFinal.length);
+                log.audit('# of statement lines', 'resultsFinal=' + resultsFinal.length);
                 for (var y = 0; resultsFinal != null && y < resultsFinal.length; y++) {
-                    //log.debug("inside results loop");
+                    //log.audit("inside results loop");
                     var resultsget = resultsFinal[y];
-                    log.debug('resultsget of this loop', resultsget);
+                    log.audit('resultsget of this loop', resultsget);
                     var columns = resultsget.columns;
 
                     //Upaya - Changed Variable
@@ -452,7 +452,7 @@
                     } else {
                         var amount = formatAmount(resultsget.getValue('fxamount'));
                     }
-                    log.debug('aging', currency + ' amount=' + amount);
+                    log.audit('aging', currency + ' amount=' + amount);
 
                     var booknum = resultsget.getValue({
                         name: 'name',
@@ -462,7 +462,7 @@
                         name: 'custbody_booking_number',
                         //summary: 'GROUP'
                     });
-                    log.debug("booknum", booknum);
+                    log.audit("booknum", booknum);
                     var guest = resultsget.getValue({
                         name: "custbody_guest_names",
                         // summary: "GROUP"
@@ -513,7 +513,7 @@
                             //summary: "SUM"
                         });
                     }
-                    log.debug('tranId=' + tranId, currency + ' amount=' + amount);
+                    log.audit('tranId=' + tranId, currency + ' amount=' + amount);
 
                     guest = resultsget.getValue({
                         name: "custbody_guest_names",
@@ -525,7 +525,7 @@
                         //summary: "GROUP"
                     });
                     var amountRem = 0.00;
-                    //log.debug("first set amount remaining, 0.00");
+                    //log.audit("first set amount remaining, 0.00");
                     var type = resultsget.getValue({
                         name: "type",
                         //summary: "GROUP"
@@ -539,7 +539,7 @@
                         });
                         if (dueDate) { } else dueDate = '';
                         amountRem = getnumber(amount) - getnumber(depositamount);
-                        //log.debug("set amount remaining if type = salesorder",amountRem);
+                        //log.audit("set amount remaining if type = salesorder",amountRem);
                     }
                     else {
                         // 8/26/22 use Prepay Due Date for both SO and INV if it exists
@@ -557,8 +557,8 @@
                                 //summary: "SUM"
                             }));
                         }
-                        log.debug('amountRem set if type != SO', currency + ' amountRem=' + amountRem);
-                        //log.debug('common part INV', 'dueDate=' + dueDate);
+                        log.audit('amountRem set if type != SO', currency + ' amountRem=' + amountRem);
+                        //log.audit('common part INV', 'dueDate=' + dueDate);
                     }
 
 
@@ -568,8 +568,8 @@
                     });
 
                     if (amountRem > 0) {
-                        //log.debug("inside amountremaining >0");
-                        //nlapiLogExecution('debug','-dueDate+ ', +dueDate);
+                        //log.audit("inside amountremaining >0");
+                        //nlapiLogExecution('audit','-dueDate+ ', +dueDate);
                         var agingdays = 0;
                         if (dueDate) {
                             agingdays = days_between(statementDate, dueDate);
@@ -595,25 +595,25 @@
                             '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(amountRem) + '</Data></Cell>' +
                             '</Row>';
 
-                        strName2 += "<tr>";//log.debug("about to do provider", provider);
+                        strName2 += "<tr>";//log.audit("about to do provider", provider);
                         strName2 += '<td style="align:left; vertical-align:top; border-color:Gray; border-collapse:collapse; border-right-width: 1px; padding-left: 5px; width: 20%;">' + xmlMod.escape({
                             xmlText: provider
                         }) + '</td>';
-                        //log.debug("about to do account", account);
+                        //log.audit("about to do account", account);
                         strName2 += '<td style="align:left; vertical-align:top; border-color:Gray; border-collapse:collapse; border-right-width: 1px; padding-left: 5px; width: 8%;">' + xmlMod.escape({
                             xmlText: account
                         }) + '</td>';
-                        //log.debug("about to do booknum",booknum);
+                        //log.audit("about to do booknum",booknum);
                         strName2 += '<td style="align:left; vertical-align:top; border-color:Gray; border-collapse:collapse; border-right-width: 1px; padding-left: 5px; width: 8%;">' + xmlMod.escape({
                             xmlText: booknum
                         }) + '</td>';
-                        //log.debug("about to do refNo",refNo);
+                        //log.audit("about to do refNo",refNo);
                         strName2 += '<td style="align:left; vertical-align:top; border-color:Gray; border-collapse:collapse; border-right-width: 1px; padding-left: 5px; width: 8%;">' + xmlMod.escape({
                             xmlText: refNo
                         }) + '</td>';
                         strName2 += '<td style="align:left; vertical-align:top; border-color:Gray; border-collapse:collapse; border-right-width: 1px; padding-left: 5px; width: 6%;">' + arrival + '</td>';
                         strName2 += '<td style="align:left; vertical-align:top; border-color:Gray; border-collapse:collapse; border-right-width: 1px; padding-left: 5px; width: 6%;">' + departure + '</td>';
-                        //log.debug("about to do guest",guest);
+                        //log.audit("about to do guest",guest);
                         strName2 += '<td style="align:left; vertical-align:top; border-color:Gray; border-collapse:collapse; border-right-width: 1px; padding-left: 5px; width: 15%;">' + xmlMod.escape({
                             xmlText: guest
                         }) + '</td>';
@@ -660,7 +660,7 @@
                     inputEncoding: encode.Encoding.UTF_8,
                     outputEncoding: encode.Encoding.BASE_64
                 });
-                //log.debug("encoded", strXmlEncoded);
+                //log.audit("encoded", strXmlEncoded);
                 if (currency == 2) {
                     var objXlsFile = file.create({
                         name: 'ExcelGBP_' + customerName + '_' + '_' + today + '.xls',
@@ -750,7 +750,7 @@
                 var file2 = render.xmlToPdf({
                     xmlString: xml
                 });
-                //log.debug("filetype = " + file2.fileType);
+                //log.audit("filetype = " + file2.fileType);
                 file2.folder = folderID;
                 file2.name = 'PDF' + currencyCode + '_' + customerName + '_' + '_' + today + '.pdf';
 
@@ -797,14 +797,14 @@
                 var arSpecialist = cusObj.arSpecialist;
                 var customerEmail = cusObj.customerEmail;
                 var customerTemplate = cusObj.customerTemplate;
-                log.debug('sendEmail cname=' + cname, 'fileIds: ' + attachmentArr);
+                log.audit('sendEmail cname=' + cname, 'fileIds: ' + attachmentArr);
 
                 //send email to customer
                 var emailRecords = new Object();
                 emailRecords['entity'] = cname;
-                //log.debug("customer template", customerTemplate);
+                //log.audit("customer template", customerTemplate);
                 if (customerTemplate == brazilTemplate) {
-                    log.debug('brazil template chosen');
+                    log.audit('brazil template chosen');
                     //brazil e-mail template
                     var emailTempId = brazilTemplate;
                 } else {
@@ -826,7 +826,7 @@
                     custArray[p] = custArray[p].trim();
                 }
 
-                log.debug('sendEmail', 'attachmentArr ' + attachmentArr.length);
+                log.audit('sendEmail', 'attachmentArr ' + attachmentArr.length);
                 var fileLoadArr = [];
                 for (var f = 0; f < attachmentArr.length; f++) {
                     var fileload = file.load({
@@ -834,7 +834,7 @@
                     });
                     fileLoadArr.push(fileload);
                 }
-                log.debug('sendEmail', 'fileLoadArr ' + fileLoadArr.length);
+                log.audit('sendEmail', 'fileLoadArr ' + fileLoadArr.length);
 
                 // Send the email and then delete the temporary employee record   
                 var emailSubject = customerName + ' Statements for ' + statementDate;
@@ -854,7 +854,7 @@
             }
 
             function getBalance(cname, resultsAmount, currency) {
-                log.debug('getBalance START', 'cname=' + cname + ' | currency=' + currency + ' | resultsAmount.length=' + resultsAmount.length);
+                log.audit('getBalance START', 'cname=' + cname + ' | currency=' + currency + ' | resultsAmount.length=' + resultsAmount.length);
                 var clientAmount = 0;
                 var clientBalance = 0;
                 var typeCol = search.createColumn({
@@ -883,11 +883,11 @@
                 // loop through customer's transactions customsearch_upaya_statement_2_earmarks. same results will be used for statement printout
                 for (var aa = 0; resultsAmount != null && aa < resultsAmount.length; aa++) {
                     var resultsGetAmount = resultsAmount[aa];
-                    log.debug("currResult", resultsGetAmount);
+                    log.audit("currResult", resultsGetAmount);
                     var columns = resultsGetAmount.columns;
-                    log.debug("columns resultsGetAmount", columns);
+                    log.audit("columns resultsGetAmount", columns);
                     var _type = resultsGetAmount.getValue(typeCol);
-                    log.debug("currResult _type", _type);
+                    log.audit("currResult _type", _type);
 
                     var depamt = parseFloat(resultsGetAmount.getValue('custbody_total_earmarks'));
                     if (currency == 1) {
@@ -895,7 +895,7 @@
                     } else {
                         var amt = parseFloat(resultsGetAmount.getValue('fxamount')); // Amount (Foreign Currency)
                     }
-                    log.debug('getBalance ' + _type, 'amt=' + amt + ' | depamt=' + depamt);
+                    log.audit('getBalance ' + _type, 'amt=' + amt + ' | depamt=' + depamt);
 
                     var remaining = getnumber(amt) - getnumber(depamt);
 
@@ -903,7 +903,7 @@
                     if (_type == 'SalesOrd') {
                         remaining = getnumber(amt) - getnumber(depamt);
                         //dueDate = resultsGetAmount.getValue(custDueDateCol);
-                        log.debug("getBalance aa is SO", 'remaining=' + remaining + ' | dueDate=' + dueDate);
+                        log.audit("getBalance aa is SO", 'remaining=' + remaining + ' | dueDate=' + dueDate);
                     }
                     else {   // 4/28/25
                         if (currency == 1) {
@@ -912,18 +912,18 @@
                             remaining = parseFloat(resultsGetAmount.getValue('fxamountremaining')); // Amount Remaining(Foreign Currency)
                         }
                         //dueDate=resultsGetAmount.getValue(dueDateCol);
-                        log.debug("getBalance aa NOT SO", 'remaining=' + remaining + ' | dueDate=' + dueDate);
+                        log.audit("getBalance aa NOT SO", 'remaining=' + remaining + ' | dueDate=' + dueDate);
                     }
 
 
                     // 8/26/22 use Prepay Due Date for both SO and INV if it exists
                     if (!isEmpty(resultsGetAmount.getValue(custDueDateCol))) {
-                        log.debug('getBalance Prepay', resultsGetAmount.getValue(custDueDateCol));
+                        log.audit('getBalance Prepay', resultsGetAmount.getValue(custDueDateCol));
                         dueDate = resultsGetAmount.getValue(custDueDateCol);
                     } else {
                         dueDate = resultsGetAmount.getValue(dueDateCol);
                     }
-                    log.debug('getBalance dueDate', 'dueDate=' + dueDate + ' | dueDate=' + dueDate);
+                    log.audit('getBalance dueDate', 'dueDate=' + dueDate + ' | dueDate=' + dueDate);
 
                     if (dueDate) { }
                     else {
@@ -935,16 +935,16 @@
                         clientBalance = clientBalance + remaining;
                     }
                 }//END FOR for (var aa=0;aa<resultsAmount.length;aa++)
-                log.debug('getBalance check', 'remaining=' + remaining + ' | dueDate=' + dueDate + ' | clientBalance=' + clientBalance);
+                log.audit('getBalance check', 'remaining=' + remaining + ' | dueDate=' + dueDate + ' | clientBalance=' + clientBalance);
 
                 log.audit("check due date? " + checkDueDate, cname + " due date = " + dueDate);
                 if (checkDueDate) { return; }
 
                 var amid1 = clientBalance.toFixed(2);
                 var netAmount = formatAmount(amid1);
-                log.debug('getBalance of ', cname + ':' + netAmount);
+                log.audit('getBalance of ', cname + ':' + netAmount);
                 if (netAmount == '0.00') {
-                    log.debug('getBalance is zero!!!', 'Skip this customer ' + cname);
+                    log.audit('getBalance is zero!!!', 'Skip this customer ' + cname);
                     return '';
                 }
 
@@ -953,14 +953,14 @@
             }
 
             function getTransactions(cname, currency) {
-                //log.debug('getTransactions', 'START currency=' + currency);
+                //log.audit('getTransactions', 'START currency=' + currency);
 
                 var startdate = new Date(2016, 00, 01);
                 var enddate = new Date();
                 var middate = new Date((startdate.getTime() + enddate.getTime()) / 2);
-                // log.debug("start date, middate, enddate", startdate + " | " + middate + " | " + enddate);
+                // log.audit("start date, middate, enddate", startdate + " | " + middate + " | " + enddate);
                 var midDateStr = String(middate.getMonth() + 1) + "/" + String(middate.getDate()) + "/" + String(middate.getFullYear());
-                //log.debug("middate str", midDateStr);
+                //log.audit("middate str", midDateStr);
 
                 //This will calculate the Total Amount Due
                 var filtersOlder = new Array();
@@ -1015,12 +1015,12 @@
                     //var resultsAmount = recordSearcher.search('transaction','customsearch_upaya_statement_2', filtersAmount, null, scheduledScriptYielder) || [];
                     var resultsOlder = runSearch('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersOlder) || [];
                     var resultsNewer = runSearch('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersNewer) || [];
-                    // log.debug("last older result",resultsOlder[resultsOlder.length-1]);
-                    // log.debug("last newer result",resultsNewer[resultsNewer.length-1]);
+                    // log.audit("last older result",resultsOlder[resultsOlder.length-1]);
+                    // log.audit("last newer result",resultsNewer[resultsNewer.length-1]);
                     var resultsAmount = resultsOlder.concat(resultsNewer);
-                    // log.debug("resultsAmount #",resultsAmount.length);
-                    // log.debug("last total result",resultsAmount[resultsAmount.length-1]);
-                    // log.debug("older length = " + resultsOlder.length, "newer length = " + resultsNewer.length + " and total length = " + resultsAmount.length);
+                    // log.audit("resultsAmount #",resultsAmount.length);
+                    // log.audit("last total result",resultsAmount[resultsAmount.length-1]);
+                    // log.audit("older length = " + resultsOlder.length, "newer length = " + resultsNewer.length + " and total length = " + resultsAmount.length);
                 }
                 return resultsAmount;
             }
@@ -1042,7 +1042,7 @@
                         filters: filters
                     });
                 }
-                //log.debug('searchRec', searchRec);
+                //log.audit('searchRec', searchRec);
                 var totalResults = [];
                 var x = 1000;
                 var searchResults = searchRec.run().getRange({
@@ -1082,3 +1082,4 @@
                 summarize: summarize
             };
         });
+

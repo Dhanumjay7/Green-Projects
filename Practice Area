@@ -3,7 +3,6 @@
  * @NScriptType MapReduceScript
  * @NModuleScope SameAccount
  */
-
 define([
     'N/search', 'N/record', 'N/runtime', 'N/xml', 'N/file', 'N/render',
     'N/url', 'N/encode', 'N/email', 'N/format', 'N/task'
@@ -40,7 +39,6 @@ define([
             statementSearch.filters.push(paramFilter);
         }
 
-        // Optional: resume filter if rescheduled mid-run
         if (FILE_CONST.RESUME_FROM_CUSTOMER) {
             var resumeFilter = search.createFilter({
                 name: 'internalidnumber',
@@ -66,6 +64,7 @@ define([
 
             if (remaining < thresholdUsage || elapsed > thresholdTime) {
                 log.audit('Rescheduling triggered', 'Remaining=' + remaining + ', Elapsed(ms)=' + elapsed);
+                // pass the current reduce key so next run can resume after it if you use resume filter
                 rescheduleMapReduce(context.key);
                 return;
             }
@@ -115,13 +114,23 @@ define([
     /* --------------------------- SUMMARIZE --------------------------- */
     function summarize(summary) {
         log.audit('Summary complete', JSON.stringify(summary));
-        if (summary.inputSummary && summary.inputSummary.error)
+        if (summary.inputSummary && summary.inputSummary.error) {
             log.error('Input Error', summary.inputSummary.error);
+        }
 
-        summary.reduceSummary.errors.iterator().each(function (key, error) {
-            log.error('Reduce Error for ' + key, error);
-            return true;
-        });
+        if (summary.mapSummary && summary.mapSummary.errors) {
+            summary.mapSummary.errors.iterator().each(function (key, error) {
+                log.error('Map Error for ' + key, error);
+                return true;
+            });
+        }
+
+        if (summary.reduceSummary && summary.reduceSummary.errors) {
+            summary.reduceSummary.errors.iterator().each(function (key, error) {
+                log.error('Reduce Error for ' + key, error);
+                return true;
+            });
+        }
     }
 
     /* --------------------------- RESCHEDULE --------------------------- */
@@ -148,7 +157,6 @@ define([
         obj.customerEmail = customerRecord.getValue('custentity_2663_email_address_notif');
         obj.customerTemplate = customerRecord.getValue('custentity_custom_email_template');
 
-        // --- default billing address (non-dynamic safe) ---
         var addrCount = customerRecord.getLineCount({ sublistId: 'addressbook' });
         for (var a = 0; a < addrCount; a++) {
             var isDefaultBilling = customerRecord.getSublistValue({
@@ -203,15 +211,12 @@ define([
         return y + m + d + hh + mm + ss;
     }
 
-    function formatMoney(number, places, symbol, thousand, decimal) {
-        number = number || 0;
-        places = !isNaN(places = Math.abs(places)) ? places : 2;
-        thousand = thousand || ",";
-        decimal = decimal || ".";
-        var negative = number < 0 ? "-" : "",
-            i = parseInt(number = Math.abs(+number || 0).toFixed(places), 10) + "",
-            j = (j = i.length) > 3 ? j % 3 : 0;
-        return negative + (j ? i.substr(0, j) + thousand : "") + i.substr(j).replace(/(\d{3})(?=\d)/g, "$1" + thousand) + (places ? decimal + Math.abs(number - i).toFixed(places).slice(2) : "");
+    function formatMoney(value) {
+        if (value === null || value === undefined || value === '') return '0.00';
+        var num = parseFloat(value);
+        if (isNaN(num)) num = 0;
+        // Use toLocaleString for thousands separator and 2 decimal places
+        return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
     function formatAmount(nStr) {
@@ -224,6 +229,15 @@ define([
             x1 = x1.replace(rgx, '$1' + ',' + '$2');
         }
         return x1 + x2;
+    }
+
+    function formatString(str) {
+        if (!str) return '';
+        str = str.replace(/CustInvc/g, 'Invoice');
+        str = str.replace(/SalesOrd/g, 'Sales Order');
+        str = str.replace(/CustDep/g, 'Customer Deposit');
+        str = str.replace(/CustCred/g, 'Credit Memo');
+        return str;
     }
 
     function runSearchPaged(recType, searchId, filters) {
@@ -311,7 +325,7 @@ define([
     }
 
     function getBalance(cname, resultsAmount, currency) {
-        log.audit('getBalance START', 'cname=' + cname + ' | currency=' + currency + ' | resultsAmount.length=' + (resultsAmount?resultsAmount.length:0));
+        log.audit('getBalance START', 'cname=' + cname + ' | currency=' + currency + ' | resultsAmount.length=' + (resultsAmount ? resultsAmount.length : 0));
         var clientBalance = 0;
         var typeCol = search.createColumn({ name: 'type' });
         var custDueDateCol = search.createColumn({ name: 'custbody_due_date' });
@@ -326,7 +340,6 @@ define([
 
             var remaining = getnumber(amt) - getnumber(depamt);
             if (_type === 'SalesOrd') {
-                // Sales Order: compute remaining from amt and depamt
                 remaining = getnumber(amt) - getnumber(depamt);
             } else {
                 remaining = (currency == 1) ? parseFloat(resultsGetAmount.getValue('amountremaining')) || 0 : parseFloat(resultsGetAmount.getValue('fxamountremaining')) || 0;
@@ -341,7 +354,7 @@ define([
 
             if (!dueDate) {
                 log.audit("setting check due date to true and breaking", resultsGetAmount.getValue('internalid'));
-                return; // return undefined to indicate incomplete due dates (same behavior as original)
+                return; // follow original behavior: return undefined to indicate issue
             }
 
             if (remaining > 0) {
@@ -381,20 +394,23 @@ define([
         // header image table
         var strNamePic = "<table>";
         strNamePic += "<tr><td>";
-        strNamePic += "<img  src=\"";
-        if (customerTemplate == brazilTemplate) {
-            var img = file.load({ id: logoBrazil });
-            var imgUrl = img.url;
-            var path = xmlMod.escape({ xmlText: imgUrl });
-        } else {
-            var img = file.load({ id: logoDefault });
-            var imgUrl = img.url;
-            var path = xmlMod.escape({ xmlText: imgUrl });
+        strNamePic += "<img src=\"";
+        try {
+            if (customerTemplate == brazilTemplate) {
+                var img = file.load({ id: logoBrazil });
+                var imgUrl = img.url;
+                var path = xmlMod.escape({ xmlText: imgUrl });
+            } else {
+                var img = file.load({ id: logoDefault });
+                var imgUrl = img.url;
+                var path = xmlMod.escape({ xmlText: imgUrl });
+            }
+            strNamePic += path;
+        } catch (e) {
+            log.error('logo load failed', e);
         }
-        strNamePic += path;
         strNamePic += "\"></img>";
-        strNamePic += "</td></tr>";
-        strNamePic += "</table>";
+        strNamePic += "</td></tr></table>";
 
         // customer info table
         var strName = "<table>";
@@ -439,11 +455,10 @@ define([
         var agingStage5 = 0.00;
 
         var resultsFinal = resultsAmount;
-        log.audit('# of statement lines', 'resultsFinal=' + (resultsFinal?resultsFinal.length:0));
+        log.audit('# of statement lines', 'resultsFinal=' + (resultsFinal ? resultsFinal.length : 0));
 
         for (var y = 0; resultsFinal != null && y < resultsFinal.length; y++) {
             var resultsget = resultsFinal[y];
-            var columns = resultsget.columns;
 
             // determine amount
             var amount;
@@ -546,7 +561,7 @@ define([
 
         strName2 += '</table>';
         var strNameSpace = '<table></table>';
-        var strName3 = '<table>...</table>'; // keep your aging table HTML if needed (omitted for brevity)
+        var strName3 = '<table></table>'; // if you need rich aging HTML put it here
 
         var payLinkURL = getPayLinkURL(cname);
         var strPayLink = '<table width="100%" style="margin-top:30px"><tr style="font-size:12px;color:blue"><td align="right">';
@@ -568,8 +583,12 @@ define([
         var fileID2 = file2.save();
 
         // Attach files to customer
-        record.attach({ record: { type: 'file', id: fileID2 }, to: { type: 'customer', id: cname } });
-        record.attach({ record: { type: 'file', id: fileID }, to: { type: 'customer', id: cname } });
+        try {
+            record.attach({ record: { type: 'file', id: fileID2 }, to: { type: 'customer', id: cname } });
+        } catch (e) { log.error('attach pdf failed', e); }
+        try {
+            record.attach({ record: { type: 'file', id: fileID }, to: { type: 'customer', id: cname } });
+        } catch (e) { log.error('attach excel failed', e); }
 
         var createdFiles = { pdf: fileID2, excel: fileID };
         return createdFiles;
@@ -578,7 +597,6 @@ define([
     function sendEmail(cusObj, statementDate, attachmentArr) {
         var cname = cusObj.cname;
         var customerName = cusObj.customerName;
-        var arSpecialist = cusObj.arSpecialist;
         var customerEmail = cusObj.customerEmail;
         var customerTemplate = cusObj.customerTemplate;
 
@@ -674,4 +692,5 @@ define([
         summarize: summarize
     };
 });
+
 

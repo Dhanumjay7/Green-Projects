@@ -1,3 +1,4 @@
+
 /**
  * @NApiVersion 2.0
  * @NScriptType MapReduceScript
@@ -1029,8 +1030,8 @@ define([
             var resultsAmount = resultsArrival;
         } else {
             //var resultsAmount = recordSearcher.search('transaction','customsearch_upaya_statement_2', filtersAmount, null, scheduledScriptYielder) || [];
-            var resultsOlder = runSearch('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersOlder) || [];
-            var resultsNewer = runSearch('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersNewer) || [];
+            var resultsOlder = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersOlder) || [];
+            var resultsNewer = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersNewer) || [];
             // log.audit("last older result",resultsOlder[resultsOlder.length-1]);
             // log.audit("last newer result",resultsNewer[resultsNewer.length-1]);
             var resultsAmount = resultsOlder.concat(resultsNewer);
@@ -1040,42 +1041,52 @@ define([
         }
         return resultsAmount;
     }
-    function runSearch(recType, searchId, filters) {
-        // *** Do we need pagination for results > 1000 ?? ***
-        if (!recType && !searchId) {
-            return [];
-        }
+    function isEmpty(param) {
+        return (param == '' || param == null || param == undefined)
+    }
+    function runSearchPaged(recType, searchId, filters) {
+        if (!recType && !searchId) return [];
+
+        // load or create search record
+        var searchRec;
         if (searchId) {
-            var searchRec = search.load(searchId);
-            if (filters) {
+            searchRec = search.load({ id: searchId });
+            if (filters && filters.length) {
                 for (var f = 0; f < filters.length; f++) {
                     searchRec.filters.push(filters[f]);
                 }
             }
         } else {
-            var searchRec = search.create({
-                type: recType,
-                filters: filters
-            });
-        }
-        //log.audit('searchRec', searchRec);
-        var totalResults = [];
-        var x = 1000;
-        var searchResults = searchRec.run().getRange({
-            start: 0,
-            end: 1000
-        });
-        totalResults = searchResults;
-        while (searchResults.length >= 1000) {
-            searchResults = searchRec.run().getRange({
-                start: x,
-                end: x + 1000
-            });
-            totalResults = totalResults.concat(searchResults);
-            x = x + 1000;
+            searchRec = search.create({ type: recType, filters: filters });
         }
 
-        return totalResults;
+        var allResults = [];
+        try {
+            // use runPaged for safer paging
+            var paged = searchRec.runPaged({ pageSize: 1000 }); // pageSize can be 100/500/1000
+            var pageRanges = paged.pageRanges;
+
+            for (var p = 0; p < pageRanges.length; p++) {
+                var page = paged.fetch({ index: pageRanges[p].index });
+                // page.data is an array-like iterator of SearchResult
+                var pageData = page.data;
+                for (var r = 0; r < pageData.length; r++) {
+                    allResults.push(pageData[r]);
+                }
+
+                // optional lightweight governance/time check to bail early if necessary
+                var remaining = runtime.getCurrentScript().getRemainingUsage();
+                if (remaining < 200) { // tune threshold
+                    log.audit('runSearchPaged: low governance, stopping page fetch', 'remaining=' + remaining);
+                    break;
+                }
+            }
+        } catch (err) {
+            log.error('runSearchPaged error', err);
+            // bubble up, caller can catch and reschedule or handle
+            throw err;
+        }
+        return allResults;
     }
 
     function getStatementDate() {

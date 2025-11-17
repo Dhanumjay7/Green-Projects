@@ -18,553 +18,633 @@ Saved Searches      : customsearch_tm1_all_subsidiaries, customsearch_tm1_journa
 */
 
 define(['N/record', 'N/search', 'N/runtime', 'N/config', 'N/email', 'N/url', 'N/task', 'N/https'],
-    function (record, search, runtime, config, email, url, task, https) {
-
-        var FILE_CONST = {
-            TM1_SUB_STATUS: {
-                CREATED: '1',
-                LOADING: '2',
-                COMPLETE: '3',
-                ERROR: '4'
-            },
-            TM1_PARENT_STATUS: {
-                LOADING: '1',
-                READY_TO_PICKUP: '2',
-                TRANSFERRING_DATA: '3',
-                TRANSFER_COMPLETE: '4',
-                ERROR: '5',
-                INSTANCE_CREATED: '6',
-                READY_TO_DELETE: '8',
-                ERROR_DUPLICATE: '9'
-            },
-            REC_TM1_PARENT: 'customrecord_tm1_data_parent',
-            REC_TM1_CHILD: 'customrecord_tm1_grouped_data',
-            REC_SUB_LOC_MAP: 'customrecord_subsidiary_location_mapping',
-            REC_TM1_SUBS: 'customrecord_tm1_data_subsidiaries',
-            SCRIPT_GRP_DATA: {
-                SCRIPT_ID: 'customscript_tlg_mr_tm1_group_data',
-                DEP_ID: 'customdeploy_tlg_mr_tm1_group_data'
-            },
-            SEARCH_TM1_JOURNAL: 'customsearch_tm1_journal',
-            SEARCH_TM1_GROUPED_CHILD_DATA: 'customsearch_tm1_grouped_child_data',
-            SCRIPT_SS_TM1: {
-                SCRIPT_ID: 'customscript_tlg_ss_tm1_group_data',
-                DEP_ID: 'customdeploy_tlg_ss_tm1_group_data'
-            }
-        };
-
-        /*
-        Function Name : getInputData
-        Purpose       : Load the Invoice search and send to Map
-        */
-        function GetInputData() {
-            try {
-                var currScriptObj = runtime.getCurrentScript();
-                var strSubsidiary = currScriptObj.getParameter({ name: 'custscript_tmtgd_grouped_data_subs' });
-                var parentRecId = currScriptObj.getParameter({ name: 'custscript_tmtgd_parent_recid' });
-                var paramPeriod = currScriptObj.getParameter({ name: 'custscript_tmtgd_period' });
-                var searchTranDataId = currScriptObj.getParameter({ name: 'custscript_tmtgd_tran_data_to_tm1' });
-                log.debug('strSubsidiary', strSubsidiary);
-                log.debug('paramPeriod', paramPeriod);
-
-                var arrSubs = [];
-                for (var count = 0; count < strSubsidiary.split(',').length; count++) {
-                    arrSubs.push(strSubsidiary.split(',')[count].split(':')[0]);
-                }
-
-                // Set parent record status to Loading Child Records
-                record.submitFields({
-                    type: FILE_CONST.REC_TM1_PARENT,
-                    id: parentRecId,
-                    values: {
-                        custrecord_tm1dp_status: FILE_CONST.TM1_PARENT_STATUS.LOADING
-                    }
-                });
-
-                // Add additional Subsidiary filters in the search
-                if (arrSubs.length > 0) {
-                    var searchTran = search.load({ id: searchTranDataId });
-                    searchTran.filters.push(search.createFilter({
-                        name: 'subsidiary', operator: 'anyof', values: arrSubs
-                    }));
-                    searchTran.filters.push(search.createFilter({
-                        name: 'postingperiod', operator: (paramPeriod ? 'anyof' : 'is'),
-                        values: (paramPeriod ? [paramPeriod] : ['TP'])
-                    }));
-                    //return searchTran;
-                    //var filteredRes = searchTran.runPaged();
-                    //log.audit('stLogTitle', 'Results: ' + filteredRes.count);
-
-                    // Ensure columns exist
-                    var columns = searchTran.columns || [];
-
-                    // Extract grouped columns and sort them (by label, fallback to name)
-                    var groupedColumns = columns.filter(function(col) {
-                        return col && col.summary === search.Summary.GROUP;
-                    });
-
-                    groupedColumns.sort(function(a, b) {
-                        var aText = (a.label || a.name || '').toString().toLowerCase();
-                        var bText = (b.label || b.name || '').toString().toLowerCase();
-                        if (aText < bText) return -1;
-                        if (aText > bText) return 1;
-                        return 0;
-                    });
-
-                    // Rebuild columns preserving original positions for non-grouped columns,
-                    // but replacing each grouped column with the next sorted grouped column.
-                    var groupIndex = 0;
-                    var rebuilt = columns.map(function(col) {
-                        if (col && col.summary === search.Summary.GROUP) {
-                            var replacement = groupedColumns[groupIndex];
-                            groupIndex += 1;
-                            return replacement;
-                        }
-                        return col;
-                    });
-
-                    // Safety: if no changes, keep original columns
-                    if (rebuilt.length > 0) {
-                        searchTran.columns = rebuilt;
-                    } else {
-                        searchTran.columns = columns;
-                    }
-
-                    return searchTran;
-                }
-            } catch (ex) {
-                log.error('Error in GetInputData', ex);
-            }
-        }
-
-        /*
-        Function Name : map
-        Purpose       : Creates the TM1 Data record with Transaction grouped data
-        */
-        function Map(context) {
-
-            var stLogTitle = 'Map';
-
-            var lineValues = JSON.parse(context.value);
-            var subId = lineValues.values['GROUP(subsidiary)'].value;
-            var blRestarted = false;
-
-            try {
-
-                if (context.isRestarted) {
-                    log.error(stLogTitle, 'SCRIPT RESTARTED');
-                    //context.write(subId, 2);
-                    blRestarted = true;
-                }
-
-                //log.debug(stLogTitle, 'MAP context: ' + JSON.stringify(context));
-
-                var currScriptObj = runtime.getCurrentScript();
-                var parentRecId = currScriptObj.getParameter({ name: 'custscript_tmtgd_parent_recid' });
-
-                var tm1Acc = lineValues.values['GROUP(custrecord_tm1_account.account)'] == '- None -' ? '' :
-                    lineValues.values['GROUP(custrecord_tm1_account.account)'];
-                var tm1Dept = lineValues.values['GROUP(custrecord_tm1_department.department)'] == '- None -' ? '' :
-                    lineValues.values['GROUP(custrecord_tm1_department.department)'];
-
-                var tm1Subs = lineValues.values['GROUP(custrecord_tm1_subsidiary.subsidiary)'] == '- None -' ? '' :
-                    lineValues.values['GROUP(custrecord_tm1_subsidiary.subsidiary)'];
-                // var tm1Class = lineValues.values['GROUP(externalid.class)'].text == '- None -' ? '' :
-                //     lineValues.values['GROUP(externalid.class)'].value;
-                var tm1Location = lineValues.values['GROUP(custrecord_tm1_location.location)'] == '- None -' ? '' :
-                    lineValues.values['GROUP(custrecord_tm1_location.location)'];
-
-                // Reversal Mapping Fix: Start
-                var stNSSubsidiary = lineValues.values['GROUP(externalid.subsidiary)'].text;
-                var stNSLocation = lineValues.values['GROUP(location)'].value;
-
-                if (!isEmpty(stNSSubsidiary) && stNSSubsidiary != '- None -' && !isEmpty(stNSLocation)) {
-                    var resMapping = searchSubsLocaMapping(stNSSubsidiary, stNSLocation);
-                    if (resMapping.length > 0) {
-                        var stReversalSub = resMapping[0].getValue('custrecord_division_code');
-                        var stReversalLoc = resMapping[0].getValue('custrecord_region_code_map');
-                        //log.debug(stLogTitle, 'tm1Subs updated ' + stReversalSub + ' - ' + stReversalLoc);
-                        tm1Subs = stReversalSub;
-                        tm1Location = stReversalLoc;
-                    } else {
-                        if (stNSSubsidiary == '811') {
-                            //log.error(stLogTitle, 'no mapping for 811 and location ' + stNSLocation);
-                        }
-                    }
-                }
-                // Reversal Mapping Fix: End
-
-                var rec = record.create({ type: 'customrecord_tm1_grouped_data' });
-                rec.setValue({ fieldId: 'custrecord_tm1gd_period', value: lineValues.values['GROUP(postingperiod)'].text });
-                // rec.setValue({ fieldId: 'custrecord_tm1gd_account_num', value: lineValues.values['GROUP(number.account)'] });
-                //rec.setValue({ fieldId: 'custrecord_tm1gd_amount', value: parseFloat(lineValues.values['SUM(netamount)']) });
-                rec.setValue({ fieldId: 'custrecord_tm1gd_amount', value: parseFloat(lineValues.values['SUM(amount)']) });       //FG: ENI-2722
-                //rec.setValue({ fieldId: 'custrecord_tm1gd_amount_local', value: parseFloat(lineValues.values['SUM(fxamount)']) }); //FG: MULTI CURRENCY FIX
-                rec.setValue({ fieldId: 'custrecord_tm1gd_amount_local', value: parseFloat(lineValues.values['SUM(formulacurrency)']) }); //FG: MULTI CURRENCY FIX
-                rec.setValue({ fieldId: 'custrecord_tm1gd_location', value: tm1Location });
-                //rec.setValue({ fieldId: 'custrecord_tm1gd_currency', value: lineValues.values['GROUP(currency)'].text });
-                rec.setValue({ fieldId: 'custrecord_tm1gd_currency', value: lineValues.values['GROUP(currency.subsidiary)'].text });
-                //rec.setValue({ fieldId: 'custrecord_tm1gd_currency_code', value: lineValues.values['GROUP(symbol.Currency)'] }); //FG: MULTI CURRENCY FIX
-                rec.setValue({ fieldId: 'custrecord_tm1gd_currency_code', value: lineValues.values['GROUP(formulatext)'] });
-                // rec.setValue({ fieldId: 'custrecord_tm1gd_lob', value: lineValues.values['GROUP(cseg_lineofbusiness)'] });
-                rec.setValue({ fieldId: 'custrecord_tm1gd_tm1_acount', value: tm1Acc });
-                rec.setValue({ fieldId: 'custrecord_tm1gd_tm1_dept', value: tm1Dept });
-                rec.setValue({ fieldId: 'custrecord_tm1gd_tm1_subs', value: tm1Subs });
-                // rec.setValue({ fieldId: 'custrecord_tm1gd_class', value: tm1Class });
-                rec.setValue({ fieldId: 'custrecord_tm1gdc_parent', value: parentRecId });
-                rec.setValue({ fieldId: 'custrecord_tm1gd_prdrec', value: parentRecId });
-                rec.setValue({ fieldId: 'custrecord_tm1gd_ns_loc', value: stNSLocation });
-
-
-                var stCurrencySub = lineValues.values['GROUP(currency.subsidiary)'].text;
-                var stCurrencyTran = lineValues.values['GROUP(currency)'].text;
-                rec.setValue({ fieldId: 'custrecord_tm1gd_tran_currency', value: stCurrencyTran });
-
-                if (stCurrencySub != stCurrencyTran && lineValues.values['GROUP(currency.subsidiary)'].value == '1') {
-                    //log.debug(stLogTitle, 'change local amount ' );
-                    rec.setValue({ fieldId: 'custrecord_tm1gd_amount_local', value: parseFloat(lineValues.values['SUM(amount)']) });
-                }
-                //if (parseFloat(lineValues.values['SUM(formulacurrency)']) == 0 && lineValues.values['GROUP(currency.subsidiary)'].value == '1') {
-                if (parseFloat(lineValues.values['SUM(formulacurrency)']) != parseFloat(lineValues.values['SUM(amount)']) && lineValues.values['GROUP(currency.subsidiary)'].value == '1') {
-                    //log.debug(stLogTitle, 'change local amount ' );
-                    rec.setValue({ fieldId: 'custrecord_tm1gd_amount_local', value: parseFloat(lineValues.values['SUM(amount)']) });
-                }
-
-
-                rec.save();
-
-                if (blRestarted) {
-                    context.write(subId, 2);
-                } else {
-                    context.write(subId, 1);
-                }
-
-            } catch (ex) {
-                log.debug('Error in Map():', ex);
-                context.write(subId, 2);
-            }
-        }
-
-        /*
-        Function Name : reduce
-        Purpose       : Set the TM1 Subsidiary child record status to ERROR or Complete 
-        */
-        function Reduce(context) {
-            try {
-                var subsidiary = context.key;
-                var arrValues = context.values;
-                var currScriptObj = runtime.getCurrentScript();
-                var strSubsidiary = currScriptObj.getParameter({ name: 'custscript_tmtgd_grouped_data_subs' });
-                var childSubRecId = '';
-
-                for (var count = 0; count < strSubsidiary.split(',').length; count++) {
-
-                    if (subsidiary == strSubsidiary.split(',')[count].split(':')[0]) {
-                        childSubRecId = strSubsidiary.split(',')[count].split(':')[1];
-                        break;
-                    }
-                }
-                //log.debug('Reduce Key: ' + subsidiary, childSubRecId);
-
-                record.submitFields({
-                    type: FILE_CONST.REC_TM1_SUBS,
-                    id: childSubRecId,
-                    values: {
-                        custrecord_tm1ds_status: (arrValues.indexOf(2) != -1 ?
-                            FILE_CONST.TM1_SUB_STATUS.ERROR : FILE_CONST.TM1_SUB_STATUS.COMPLETE)
-                    }
-                });
-
-                if (arrValues.indexOf(2) != -1) {
-                    context.write('Error', 'Error');
-                } else {
-                    context.write('Pass', 'Pass');
-                }
-            } catch (ex) {
-                log.debug('Error in Reduce():', ex);
-            }
-        }
-
-        /*
-        Function Name : summarize
-        Purpose       : Set the TM1 Subsidiary child record status to ERROR or Ready to Pickup
-        */
-        function Summarize(summary) {
-            try {
-                var currScriptObj = runtime.getCurrentScript();
-                var parentRecId = currScriptObj.getParameter({ name: 'custscript_tmtgd_parent_recid' });
-                var errorFlag = false;
-                var sentKey = false;
-                var companyInfo = config.load({ type: config.Type.COMPANY_PREFERENCES });
-                var author = companyInfo.getValue('custscript_error_email_author');
-                var recipients = companyInfo.getValue('custscript_tmtgd_recipient');
-
-                // START: Check for duplicate entries
-                var searchChild = search.load({ id: FILE_CONST.SEARCH_TM1_GROUPED_CHILD_DATA });
-                searchChild.filters.push(search.createFilter({
-                    name: 'custrecord_tm1gdc_parent',
-                    operator: 'anyof', values: [parentRecId]
-                }));
-                var searchResCount = searchChild.runPaged().count;
-                var recCounFromParent = search.create({
-                    type: FILE_CONST.REC_TM1_CHILD,
-                    filters: [search.createFilter({ name: 'custrecord_tm1gdc_parent', operator: 'anyof', values: [parentRecId] })],
-                    columns: ['internalid']
-                }).runPaged().count;
-                log.debug('searchResCount:' + searchResCount, 'recCounFromParent:' + recCounFromParent);
-                var countMatch = searchResCount == recCounFromParent;
-                log.debug('countMatch', countMatch)
-                //END: Check for duplicate entries
-
-                summary.output.iterator().each(function (key, value) {
-                    sentKey = true;
-                    if (key == 'Error') {
-                        errorFlag = true;
-                    }
-                    return true;
-                });
-
-                log.audit('summarize', 'Restart: ' + summary.isRestarted + ' - Error: ' + errorFlag + ' - Send: ' + sentKey);
-                if (summary.isRestarted) {
-
-                    log.error('summarize', summary.isRestarted);
-                    record.submitFields({
-                        type: FILE_CONST.REC_TM1_PARENT,
-                        id: parentRecId,
-                        values: {
-                            custrecord_tm1dp_status: (errorFlag ?
-                                FILE_CONST.TM1_PARENT_STATUS.ERROR : FILE_CONST.TM1_PARENT_STATUS.ERROR)
-                        }
-                    });
-
-                } else {
-
-
-                    if (sentKey) {
-
-                        //ENI-3766 - Start
-                        log.debug('Summarize', 'ENI-3766 - Start');
-                        //get period of current parent
-                        var parentPeriod = search.lookupFields({
-                            type: FILE_CONST.REC_TM1_PARENT,
-                            id: parentRecId,
-                            columns: ['custrecord_tm1dp_period']
-                        }).custrecord_tm1dp_period;
-                        log.debug('parentPeriod', parentPeriod);
-                        if (parentPeriod) {
-                            var parents = updateParentsAlreadyInPickupStatus(parentPeriod);
-                            log.debug('parents', parents);
-                            log.debug('recipients', recipients);
-                            if (recipients && parents && parents.length > 0) {
-                                //send email to Sree, Fede, Diego, John, Mati an Rodrigo
-                                var arrReceipts = recipients.split(',');
-                                log.debug('arrReceipts', arrReceipts);
-                                var emailBody = 'The following TM1 Data Parents changed their status to READY TO DELETE:  <br/>' +
-                                    parents + '<br/>'
-                                email.send({
-                                    author: author,
-                                    recipients: arrReceipts,
-                                    subject: 'TM1 parent records Ready to delete',
-                                    body: emailBody
-                                });
-                            }
-                        }
-                        log.debug('Summarize', 'ENI-3766 - End');
-                        //ENI-3766 - End
-
-                        // Commented below for change - Boomi removing Duplicate lines
-                        // var statusToSet = (errorFlag ?
-                        //     FILE_CONST.TM1_PARENT_STATUS.ERROR : countMatch ? FILE_CONST.TM1_PARENT_STATUS.READY_TO_PICKUP :
-                        //     FILE_CONST.TM1_PARENT_STATUS.ERROR_DUPLICATE);
-                        // Added below for change - Boomi removing Duplicate lines
-                        var statusToSet = (errorFlag ? FILE_CONST.TM1_PARENT_STATUS.ERROR : FILE_CONST.TM1_PARENT_STATUS.READY_TO_PICKUP);
-                        record.submitFields({
-                            type: FILE_CONST.REC_TM1_PARENT,
-                            id: parentRecId,
-                            values: {
-                                custrecord_tm1dp_status: statusToSet
-                            }
-                        });
-
-                        /*
-                        if (!countMatch) {
-                            log.debug('Retrigger because of duplicates.')
-                            var paramPeriod = currScriptObj.getParameter({ name: 'custscript_tmtgd_period' });
-
-                            // Trigger Schedule script to Trigger TM1 Process for the selected Period
-                            var mapReduceScript = task.create({
-                                taskType: task.TaskType.SCHEDULED_SCRIPT
-                            });
-                            mapReduceScript.scriptId = FILE_CONST.SCRIPT_SS_TM1.SCRIPT_ID;
-                            mapReduceScript.deploymentId = FILE_CONST.SCRIPT_SS_TM1.DEP_ID;
-                            mapReduceScript.params = {
-                                'custscript_sstmgd_period': paramPeriod
-                            };
-                            var taskId = mapReduceScript.submit();
-                            log.debug('TM1 script triggered', taskId);
-                        }
-                        */
-
-                        if (statusToSet == FILE_CONST.TM1_PARENT_STATUS.READY_TO_PICKUP) {
-                            //CallBoomiProcess();
-                        }
-                    }
-                }
-
-                var outputURL = url.resolveRecord({
-                    recordType: FILE_CONST.REC_TM1_PARENT,
-                    recordId: parentRecId,
-                    isEditMode: false
-                });
-
-                if (recipients && errorFlag == true) {
-                    var emailBody = 'TM1 Data Load is complete in Netsuite. <br/>' +
-                        'Click the <a href="' + outputURL + '">link</a> to redirect to TM1 Data Parent Record.<br/><br/>' +
-                        'Details are as below:<br/>' +
-                        'Status: ' + (errorFlag ? 'Error' : 'Ready to Pickup') + '<br/>' +
-                        'Period: ' + search.lookupFields({
-                            type: FILE_CONST.REC_TM1_PARENT,
-                            id: parentRecId,
-                            columns: ['custrecord_tm1dp_period']
-                        }).custrecord_tm1dp_period;
-
-                    email.send({
-                        author: author,
-                        recipients: recipients.split(','),
-                        subject: 'TM1 Data Load Complete-Netsuite',
-                        body: emailBody
-                    });
-                }
-                var type = summary.toString();
-                log.audit(type + ' Usage Consumed', summary.usage);
-                log.audit(type + ' Number of Queues', summary.concurrency);
-                log.audit(type + ' Number of Yields', summary.yields);
-            } catch (ex) {
-                log.error('Summarize', ex);
-            }
-            log.audit('Map / Reduce END', new Date());
-        }
-
-        function CallBoomiProcess() {
-            var currentScript = runtime.getCurrentScript();
-            var configRecObj = config.load({ type: config.Type.COMPANY_PREFERENCES });
-            var atomId = configRecObj.getValue('custscript_bjsc_atom_id');
-            var auth = configRecObj.getValue('custscript_bjsc_auth');
-            var processId = currentScript.getParameter('custscript_tmtgd_boomi_tm1_process_id');
-
-            var headers = CreateHeaders(auth);
-
-            var body = ('{' +
-                '"atomId":"' + atomId + '",' +
-                '"processId":"' + processId +
-                '"}')
-
-            var response = https.post({
-                url: 'https://api.boomi.com/api/rest/v1/travelleadersgroup-65J4GT/executeProcess',
-                headers: headers,
-                body: body
-            });
-            log.debug('response.code', response.code);
-
-            if (response.code === 200) {
-                log.debug('Boomi Job Triggered');
-            } else {
-                log.debug('Boomi Job: Some error has occurred. Please contact administrator');
-            }
-        }
-
-        function CreateHeaders(auth) {
-            var headers = {};
-            headers["content-type"] = 'application/json';
-            headers.Authorization = auth;
-            headers.Origin = 'https://netsuite.com';
-            headers['Access-Control-Request-Method'] = 'POST';
-            headers.accept = 'application/json';
-            return headers;
-        }
-
-        //this function checks if old parents are ready to pickup and change it to ready to delete
-        function updateParentsAlreadyInPickupStatus(parentPeriod) {
-            var stLogTitle = 'updateParentsAlreadyInPickupStatus';
-            try {
-                var searchId = runtime.getCurrentScript().getParameter('custscript_ss_parents_readytopickup');
-                var objSearch = search.load({ id: searchId });
-
-                var objFilter = search.createFilter({
-                    name: 'custrecord_tm1dp_period',
-                    operator: search.Operator.IS,
-                    values: parentPeriod
-                });
-                objSearch.filters.push(objFilter);
-
-                var objFilter = search.createFilter({
-                    name: 'custrecord_tm1dp_status',
-                    operator: search.Operator.ANYOF,
-                    values: FILE_CONST.TM1_PARENT_STATUS.READY_TO_PICKUP
-                });
-                objSearch.filters.push(objFilter);
-                var parents = [];
-                objSearch.run().each(function (result) {
-                    var parentRecId = result.getValue({ name: 'internalid' });
-                    parents.push(parentRecId);
-                    record.submitFields({
-                        type: FILE_CONST.REC_TM1_PARENT,
-                        id: parentRecId,
-                        values: {
-                            custrecord_tm1dp_status: FILE_CONST.TM1_PARENT_STATUS.READY_TO_DELETE
-                        }
-                    });
-                    return true;
-                });
-                return parents;
-            } catch (ex) {
-                log.error(stLogTitle, ex);
-            }
-        }
-
-        function searchSubsLocaMapping(stNSSubsidiary, stNSLocation) {
-
-            var stLogTitle = 'searchSubsLocaMapping';
-
-            try {
-
-                var searchId = runtime.getCurrentScript().getParameter('custscript_tmtgd_ss_subslocmapping');
-                //var searchId = 'customsearch_tlg_tbu_sublocmapp';
-                var objSearch = search.load({ id: searchId });
-
-                var objFilter = search.createFilter({
-                    name: 'custrecord_subsidiary_code',
-                    operator: search.Operator.IS,
-                    values: stNSSubsidiary
-                });
-                objSearch.filters.push(objFilter);
-
-                var objFilter = search.createFilter({
-                    name: 'custrecord_slm_location',
-                    operator: search.Operator.ANYOF,
-                    values: stNSLocation
-                });
-                objSearch.filters.push(objFilter);
-
-                return objSearch.run().getRange({ start: 0, end: 1 });
-
-            } catch (e) {
-                log.error(stLogTitle, e);
-            }
-        }
-
-        return {
-            getInputData: GetInputData,
-            map: Map,
-            reduce: Reduce,
-            summarize: Summarize
-        };
-    });
+	function (record, search, runtime, config, email, url, task, https) {
+
+		var FILE_CONST = {
+			TM1_SUB_STATUS: {
+				CREATED: '1',
+				LOADING: '2',
+				COMPLETE: '3',
+				ERROR: '4'
+			},
+			TM1_PARENT_STATUS: {
+				LOADING: '1',
+				READY_TO_PICKUP: '2',
+				TRANSFERRING_DATA: '3',
+				TRANSFER_COMPLETE: '4',
+				ERROR: '5',
+				INSTANCE_CREATED: '6',
+				READY_TO_DELETE: '8',
+				ERROR_DUPLICATE: '9'
+			},
+			REC_TM1_PARENT: 'customrecord_tm1_data_parent',
+			REC_TM1_CHILD: 'customrecord_tm1_grouped_data',
+			REC_SUB_LOC_MAP: 'customrecord_subsidiary_location_mapping',
+			REC_TM1_SUBS: 'customrecord_tm1_data_subsidiaries',
+			SCRIPT_GRP_DATA: {
+				SCRIPT_ID: 'customscript_tlg_mr_tm1_group_data',
+				DEP_ID: 'customdeploy_tlg_mr_tm1_group_data'
+			},
+			SEARCH_TM1_JOURNAL: 'customsearch_tm1_journal',
+			SEARCH_TM1_GROUPED_CHILD_DATA: 'customsearch_tm1_grouped_child_data',
+			SCRIPT_SS_TM1: {
+				SCRIPT_ID: 'customscript_tlg_ss_tm1_group_data',
+				DEP_ID: 'customdeploy_tlg_ss_tm1_group_data'
+			}
+		};
+
+		/*
+		Function Name : getInputData
+		Purpose       : Load the Invoice search and send to Map
+		*/
+		function GetInputData() {
+			try {
+				var currScriptObj = runtime.getCurrentScript();
+				var strSubsidiary = currScriptObj.getParameter({ name: 'custscript_tmtgd_grouped_data_subs' });
+				var parentRecId = currScriptObj.getParameter({ name: 'custscript_tmtgd_parent_recid' });
+				var paramPeriod = currScriptObj.getParameter({ name: 'custscript_tmtgd_period' });
+				var searchTranDataId = currScriptObj.getParameter({ name: 'custscript_tmtgd_tran_data_to_tm1' });
+				log.debug('strSubsidiary', strSubsidiary);
+				log.debug('paramPeriod', paramPeriod);
+
+				var arrSubs = [];
+				for (var count = 0; count < strSubsidiary.split(',').length; count++) {
+					arrSubs.push(strSubsidiary.split(',')[count].split(':')[0]);
+				}
+
+				// Set parent record status to Loading Child Records
+				record.submitFields({
+					type: FILE_CONST.REC_TM1_PARENT,
+					id: parentRecId,
+					values: {
+						custrecord_tm1dp_status: FILE_CONST.TM1_PARENT_STATUS.LOADING
+					}
+				});
+
+				// Add additional Subsidiary filters in the search
+				if (arrSubs.length > 0) {
+					var searchTran = search.load({ id: searchTranDataId });
+					searchTran.filters.push(search.createFilter({
+						name: 'subsidiary', operator: 'anyof', values: arrSubs
+					}));
+					searchTran.filters.push(search.createFilter({
+						name: 'postingperiod', operator: (paramPeriod ? 'anyof' : 'is'),
+						values: (paramPeriod ? [paramPeriod] : ['TP'])
+					}));
+					//return searchTran;
+					//var filteredRes = searchTran.runPaged();
+					//log.audit('stLogTitle', 'Results: ' + filteredRes.count);
+
+					// Ensure columns exist
+					var columns = searchTran.columns || [];
+
+					// -------------------- START: deterministic column rebuild + sorting --------------------
+
+					// Helper: recreate a column with the same properties and an optional sort
+					function cloneColumnWithSort(col, sortDirection) {
+						var opts = {};
+						if (col.name) opts.name = col.name;
+						if (col.join) opts.join = col.join;
+						if (col.summary) opts.summary = col.summary;
+						if (col.formula) opts.formula = col.formula;
+						if (col.label) opts.label = col.label;
+						if (col.function) opts.function = col.function;
+						if (col.formulaSummary) opts.formulaSummary = col.formulaSummary;
+						if (sortDirection) opts.sort = sortDirection;
+						return search.createColumn(opts);
+					}
+
+					// CUSTOM ORDER — MODIFY ONLY IF CLIENT CHANGES REQUIREMENTS
+					var customSortMap = {
+						'Period': search.Sort.ASC,
+						'Account': search.Sort.ASC,
+						'Department': search.Sort.ASC,
+						'Location': search.Sort.ASC,
+						'Subsidiary': search.Sort.ASC,
+						'AMOUNT': search.Sort.DESC,
+						'Currency': search.Sort.ASC
+					};
+
+					// Determine sort direction for each column
+					function determineSort(col) {
+						var lbl = (col.label || '').trim();
+						var nm = (col.name || '').trim();
+
+						if (customSortMap[lbl] !== undefined) return customSortMap[lbl];
+						if (customSortMap[nm] !== undefined) return customSortMap[nm];
+
+						if (col.summary === search.Summary.GROUP) return search.Sort.ASC;
+						if (col.summary === search.Summary.SUM) return search.Sort.DESC;
+
+						return null;
+					}
+
+					if (columns && columns.length > 0) {
+
+						var finalOrder = [];
+						var usedIdx = {};
+
+						// Attach client-priority columns first (as ordered in customSortMap)
+						function findColumn(key) {
+							for (var i = 0; i < columns.length; i++) {
+								var c = columns[i];
+								if (!c) continue;
+
+								var lbl = (c.label || '').toLowerCase();
+								var nm = (c.name || '').toLowerCase();
+
+								if (lbl.indexOf(key.toLowerCase()) !== -1 || nm.indexOf(key.toLowerCase()) !== -1) {
+									return i;
+								}
+							}
+							return -1;
+						}
+
+						var sortKeys = Object.keys(customSortMap);
+						for (var s = 0; s < sortKeys.length; s++) {
+							var idx = findColumn(sortKeys[s]);
+							if (idx !== -1 && !usedIdx[idx]) {
+								usedIdx[idx] = true;
+								finalOrder.push(columns[idx]);
+							}
+						}
+
+						// Add remaining columns in original order
+						for (var j = 0; j < columns.length; j++) {
+							if (!usedIdx[j]) finalOrder.push(columns[j]);
+						}
+
+						// Recreate new columns with sort direction applied
+						var newCols = [];
+						for (var i = 0; i < finalOrder.length; i++) {
+							var col = finalOrder[i];
+							var sortDir = determineSort(col);
+							newCols.push(cloneColumnWithSort(col, sortDir));
+						}
+
+						searchTran.columns = newCols;
+						// ---- DEBUG: PRINT SORTED COLUMNS ----
+						try {
+							log.debug("SORTED COLUMNS COUNT", newCols.length);
+
+							var colInfo = [];
+							for (var i = 0; i < newCols.length; i++) {
+								var c = newCols[i];
+								colInfo.push({
+									index: i,
+									name: c.name || '',
+									label: c.label || '',
+									summary: c.summary || '',
+									formula: c.formula || '',
+									sort: c.sort || 'NONE'
+								});
+							}
+
+							log.debug("SORTED COLUMN DETAILS", JSON.stringify(colInfo, null, 2));
+						} catch (e) {
+							log.error("LOGGING ERROR", e);
+						}
+
+					}
+
+					// -------------------- END: deterministic column rebuild + sorting --------------------
+
+
+				}
+			} catch (ex) {
+				log.error('Error in GetInputData', ex);
+			}
+		}
+
+		/*
+		Function Name : map
+		Purpose       : Creates the TM1 Data record with Transaction grouped data
+		*/
+		function Map(context) {
+
+			var stLogTitle = 'Map';
+
+			var lineValues = JSON.parse(context.value);
+			log.debug('lineValues in the Map function', lineValues);
+			var subId = lineValues.values['GROUP(subsidiary)'].value;
+			var blRestarted = false;
+
+			try {
+
+				if (context.isRestarted) {
+					log.error(stLogTitle, 'SCRIPT RESTARTED');
+					//context.write(subId, 2);
+					blRestarted = true;
+				}
+
+				//log.debug(stLogTitle, 'MAP context: ' + JSON.stringify(context));
+
+				var currScriptObj = runtime.getCurrentScript();
+				var parentRecId = currScriptObj.getParameter({ name: 'custscript_tmtgd_parent_recid' });
+
+				var tm1Acc = lineValues.values['GROUP(custrecord_tm1_account.account)'] == '- None -' ? '' :
+					lineValues.values['GROUP(custrecord_tm1_account.account)'];
+				var tm1Dept = lineValues.values['GROUP(custrecord_tm1_department.department)'] == '- None -' ? '' :
+					lineValues.values['GROUP(custrecord_tm1_department.department)'];
+
+				var tm1Subs = lineValues.values['GROUP(custrecord_tm1_subsidiary.subsidiary)'] == '- None -' ? '' :
+					lineValues.values['GROUP(custrecord_tm1_subsidiary.subsidiary)'];
+				// var tm1Class = lineValues.values['GROUP(externalid.class)'].text == '- None -' ? '' :
+				//     lineValues.values['GROUP(externalid.class)'].value;
+				var tm1Location = lineValues.values['GROUP(custrecord_tm1_location.location)'] == '- None -' ? '' :
+					lineValues.values['GROUP(custrecord_tm1_location.location)'];
+
+				// Reversal Mapping Fix: Start
+				var stNSSubsidiary = lineValues.values['GROUP(externalid.subsidiary)'].text;
+				var stNSLocation = lineValues.values['GROUP(location)'].value;
+
+				if (!isEmpty(stNSSubsidiary) && stNSSubsidiary != '- None -' && !isEmpty(stNSLocation)) {
+					var resMapping = searchSubsLocaMapping(stNSSubsidiary, stNSLocation);
+					if (resMapping.length > 0) {
+						var stReversalSub = resMapping[0].getValue('custrecord_division_code');
+						var stReversalLoc = resMapping[0].getValue('custrecord_region_code_map');
+						//log.debug(stLogTitle, 'tm1Subs updated ' + stReversalSub + ' - ' + stReversalLoc);
+						tm1Subs = stReversalSub;
+						tm1Location = stReversalLoc;
+					} else {
+						if (stNSSubsidiary == '811') {
+							//log.error(stLogTitle, 'no mapping for 811 and location ' + stNSLocation);
+						}
+					}
+				}
+				// Reversal Mapping Fix: End
+
+				var rec = record.create({ type: 'customrecord_tm1_grouped_data' });
+				rec.setValue({ fieldId: 'custrecord_tm1gd_period', value: lineValues.values['GROUP(postingperiod)'].text });
+				// rec.setValue({ fieldId: 'custrecord_tm1gd_account_num', value: lineValues.values['GROUP(number.account)'] });
+				//rec.setValue({ fieldId: 'custrecord_tm1gd_amount', value: parseFloat(lineValues.values['SUM(netamount)']) });
+				rec.setValue({ fieldId: 'custrecord_tm1gd_amount', value: parseFloat(lineValues.values['SUM(amount)']) });       //FG: ENI-2722
+				//rec.setValue({ fieldId: 'custrecord_tm1gd_amount_local', value: parseFloat(lineValues.values['SUM(fxamount)']) }); //FG: MULTI CURRENCY FIX
+				rec.setValue({ fieldId: 'custrecord_tm1gd_amount_local', value: parseFloat(lineValues.values['SUM(formulacurrency)']) }); //FG: MULTI CURRENCY FIX
+				rec.setValue({ fieldId: 'custrecord_tm1gd_location', value: tm1Location });
+				//rec.setValue({ fieldId: 'custrecord_tm1gd_currency', value: lineValues.values['GROUP(currency)'].text });
+				rec.setValue({ fieldId: 'custrecord_tm1gd_currency', value: lineValues.values['GROUP(currency.subsidiary)'].text });
+				//rec.setValue({ fieldId: 'custrecord_tm1gd_currency_code', value: lineValues.values['GROUP(symbol.Currency)'] }); //FG: MULTI CURRENCY FIX
+				rec.setValue({ fieldId: 'custrecord_tm1gd_currency_code', value: lineValues.values['GROUP(formulatext)'] });
+				// rec.setValue({ fieldId: 'custrecord_tm1gd_lob', value: lineValues.values['GROUP(cseg_lineofbusiness)'] });
+				rec.setValue({ fieldId: 'custrecord_tm1gd_tm1_acount', value: tm1Acc });
+				rec.setValue({ fieldId: 'custrecord_tm1gd_tm1_dept', value: tm1Dept });
+				rec.setValue({ fieldId: 'custrecord_tm1gd_tm1_subs', value: tm1Subs });
+				// rec.setValue({ fieldId: 'custrecord_tm1gd_class', value: tm1Class });
+				rec.setValue({ fieldId: 'custrecord_tm1gdc_parent', value: parentRecId });
+				rec.setValue({ fieldId: 'custrecord_tm1gd_prdrec', value: parentRecId });
+				rec.setValue({ fieldId: 'custrecord_tm1gd_ns_loc', value: stNSLocation });
+
+
+				var stCurrencySub = lineValues.values['GROUP(currency.subsidiary)'].text;
+				var stCurrencyTran = lineValues.values['GROUP(currency)'].text;
+				rec.setValue({ fieldId: 'custrecord_tm1gd_tran_currency', value: stCurrencyTran });
+
+				if (stCurrencySub != stCurrencyTran && lineValues.values['GROUP(currency.subsidiary)'].value == '1') {
+					//log.debug(stLogTitle, 'change local amount ' );
+					rec.setValue({ fieldId: 'custrecord_tm1gd_amount_local', value: parseFloat(lineValues.values['SUM(amount)']) });
+				}
+				//if (parseFloat(lineValues.values['SUM(formulacurrency)']) == 0 && lineValues.values['GROUP(currency.subsidiary)'].value == '1') {
+				if (parseFloat(lineValues.values['SUM(formulacurrency)']) != parseFloat(lineValues.values['SUM(amount)']) && lineValues.values['GROUP(currency.subsidiary)'].value == '1') {
+					//log.debug(stLogTitle, 'change local amount ' );
+					rec.setValue({ fieldId: 'custrecord_tm1gd_amount_local', value: parseFloat(lineValues.values['SUM(amount)']) });
+				}
+
+
+				rec.save();
+
+				if (blRestarted) {
+					context.write(subId, 2);
+				} else {
+					context.write(subId, 1);
+				}
+
+			} catch (ex) {
+				log.debug('Error in Map():', ex);
+				context.write(subId, 2);
+			}
+		}
+
+		/*
+		Function Name : reduce
+		Purpose       : Set the TM1 Subsidiary child record status to ERROR or Complete 
+		*/
+		function Reduce(context) {
+			try {
+				var subsidiary = context.key;
+				var arrValues = context.values;
+				var currScriptObj = runtime.getCurrentScript();
+				var strSubsidiary = currScriptObj.getParameter({ name: 'custscript_tmtgd_grouped_data_subs' });
+				var childSubRecId = '';
+
+				for (var count = 0; count < strSubsidiary.split(',').length; count++) {
+
+					if (subsidiary == strSubsidiary.split(',')[count].split(':')[0]) {
+						childSubRecId = strSubsidiary.split(',')[count].split(':')[1];
+						break;
+					}
+				}
+				//log.debug('Reduce Key: ' + subsidiary, childSubRecId);
+
+				record.submitFields({
+					type: FILE_CONST.REC_TM1_SUBS,
+					id: childSubRecId,
+					values: {
+						custrecord_tm1ds_status: (arrValues.indexOf(2) != -1 ?
+							FILE_CONST.TM1_SUB_STATUS.ERROR : FILE_CONST.TM1_SUB_STATUS.COMPLETE)
+					}
+				});
+
+				if (arrValues.indexOf(2) != -1) {
+					context.write('Error', 'Error');
+				} else {
+					context.write('Pass', 'Pass');
+				}
+			} catch (ex) {
+				log.debug('Error in Reduce():', ex);
+			}
+		}
+
+		/*
+		Function Name : summarize
+		Purpose       : Set the TM1 Subsidiary child record status to ERROR or Ready to Pickup
+		*/
+		function Summarize(summary) {
+			try {
+				var currScriptObj = runtime.getCurrentScript();
+				var parentRecId = currScriptObj.getParameter({ name: 'custscript_tmtgd_parent_recid' });
+				var errorFlag = false;
+				var sentKey = false;
+				var companyInfo = config.load({ type: config.Type.COMPANY_PREFERENCES });
+				var author = companyInfo.getValue('custscript_error_email_author');
+				var recipients = companyInfo.getValue('custscript_tmtgd_recipient');
+
+				// START: Check for duplicate entries
+				var searchChild = search.load({ id: FILE_CONST.SEARCH_TM1_GROUPED_CHILD_DATA });
+				searchChild.filters.push(search.createFilter({
+					name: 'custrecord_tm1gdc_parent',
+					operator: 'anyof', values: [parentRecId]
+				}));
+				var searchResCount = searchChild.runPaged().count;
+				var recCounFromParent = search.create({
+					type: FILE_CONST.REC_TM1_CHILD,
+					filters: [search.createFilter({ name: 'custrecord_tm1gdc_parent', operator: 'anyof', values: [parentRecId] })],
+					columns: ['internalid']
+				}).runPaged().count;
+				log.debug('searchResCount:' + searchResCount, 'recCounFromParent:' + recCounFromParent);
+				var countMatch = searchResCount == recCounFromParent;
+				log.debug('countMatch', countMatch)
+				//END: Check for duplicate entries
+
+				summary.output.iterator().each(function (key, value) {
+					sentKey = true;
+					if (key == 'Error') {
+						errorFlag = true;
+					}
+					return true;
+				});
+
+				log.audit('summarize', 'Restart: ' + summary.isRestarted + ' - Error: ' + errorFlag + ' - Send: ' + sentKey);
+				if (summary.isRestarted) {
+
+					log.error('summarize', summary.isRestarted);
+					record.submitFields({
+						type: FILE_CONST.REC_TM1_PARENT,
+						id: parentRecId,
+						values: {
+							custrecord_tm1dp_status: (errorFlag ?
+								FILE_CONST.TM1_PARENT_STATUS.ERROR : FILE_CONST.TM1_PARENT_STATUS.ERROR)
+						}
+					});
+
+				} else {
+
+
+					if (sentKey) {
+
+						//ENI-3766 - Start
+						log.debug('Summarize', 'ENI-3766 - Start');
+						//get period of current parent
+						var parentPeriod = search.lookupFields({
+							type: FILE_CONST.REC_TM1_PARENT,
+							id: parentRecId,
+							columns: ['custrecord_tm1dp_period']
+						}).custrecord_tm1dp_period;
+						log.debug('parentPeriod', parentPeriod);
+						if (parentPeriod) {
+							var parents = updateParentsAlreadyInPickupStatus(parentPeriod);
+							log.debug('parents', parents);
+							log.debug('recipients', recipients);
+							if (recipients && parents && parents.length > 0) {
+								//send email to Sree, Fede, Diego, John, Mati an Rodrigo
+								var arrReceipts = recipients.split(',');
+								log.debug('arrReceipts', arrReceipts);
+								var emailBody = 'The following TM1 Data Parents changed their status to READY TO DELETE:  <br/>' +
+									parents + '<br/>'
+								email.send({
+									author: author,
+									recipients: arrReceipts,
+									subject: 'TM1 parent records Ready to delete',
+									body: emailBody
+								});
+							}
+						}
+						log.debug('Summarize', 'ENI-3766 - End');
+						//ENI-3766 - End
+
+						// Commented below for change - Boomi removing Duplicate lines
+						// var statusToSet = (errorFlag ?
+						//     FILE_CONST.TM1_PARENT_STATUS.ERROR : countMatch ? FILE_CONST.TM1_PARENT_STATUS.READY_TO_PICKUP :
+						//     FILE_CONST.TM1_PARENT_STATUS.ERROR_DUPLICATE);
+						// Added below for change - Boomi removing Duplicate lines
+						var statusToSet = (errorFlag ? FILE_CONST.TM1_PARENT_STATUS.ERROR : FILE_CONST.TM1_PARENT_STATUS.READY_TO_PICKUP);
+						record.submitFields({
+							type: FILE_CONST.REC_TM1_PARENT,
+							id: parentRecId,
+							values: {
+								custrecord_tm1dp_status: statusToSet
+							}
+						});
+
+						/*
+						if (!countMatch) {
+							log.debug('Retrigger because of duplicates.')
+							var paramPeriod = currScriptObj.getParameter({ name: 'custscript_tmtgd_period' });
+
+							// Trigger Schedule script to Trigger TM1 Process for the selected Period
+							var mapReduceScript = task.create({
+								taskType: task.TaskType.SCHEDULED_SCRIPT
+							});
+							mapReduceScript.scriptId = FILE_CONST.SCRIPT_SS_TM1.SCRIPT_ID;
+							mapReduceScript.deploymentId = FILE_CONST.SCRIPT_SS_TM1.DEP_ID;
+							mapReduceScript.params = {
+								'custscript_sstmgd_period': paramPeriod
+							};
+							var taskId = mapReduceScript.submit();
+							log.debug('TM1 script triggered', taskId);
+						}
+						*/
+
+						if (statusToSet == FILE_CONST.TM1_PARENT_STATUS.READY_TO_PICKUP) {
+							//CallBoomiProcess();
+						}
+					}
+				}
+
+				var outputURL = url.resolveRecord({
+					recordType: FILE_CONST.REC_TM1_PARENT,
+					recordId: parentRecId,
+					isEditMode: false
+				});
+
+				if (recipients && errorFlag == true) {
+					var emailBody = 'TM1 Data Load is complete in Netsuite. <br/>' +
+						'Click the <a href="' + outputURL + '">link</a> to redirect to TM1 Data Parent Record.<br/><br/>' +
+						'Details are as below:<br/>' +
+						'Status: ' + (errorFlag ? 'Error' : 'Ready to Pickup') + '<br/>' +
+						'Period: ' + search.lookupFields({
+							type: FILE_CONST.REC_TM1_PARENT,
+							id: parentRecId,
+							columns: ['custrecord_tm1dp_period']
+						}).custrecord_tm1dp_period;
+
+					email.send({
+						author: author,
+						recipients: recipients.split(','),
+						subject: 'TM1 Data Load Complete-Netsuite',
+						body: emailBody
+					});
+				}
+				var type = summary.toString();
+				log.audit(type + ' Usage Consumed', summary.usage);
+				log.audit(type + ' Number of Queues', summary.concurrency);
+				log.audit(type + ' Number of Yields', summary.yields);
+			} catch (ex) {
+				log.error('Summarize', ex);
+			}
+			log.audit('Map / Reduce END', new Date());
+		}
+
+		function CallBoomiProcess() {
+			var currentScript = runtime.getCurrentScript();
+			var configRecObj = config.load({ type: config.Type.COMPANY_PREFERENCES });
+			var atomId = configRecObj.getValue('custscript_bjsc_atom_id');
+			var auth = configRecObj.getValue('custscript_bjsc_auth');
+			var processId = currentScript.getParameter('custscript_tmtgd_boomi_tm1_process_id');
+
+			var headers = CreateHeaders(auth);
+
+			var body = ('{' +
+				'"atomId":"' + atomId + '",' +
+				'"processId":"' + processId +
+				'"}')
+
+			var response = https.post({
+				url: 'https://api.boomi.com/api/rest/v1/travelleadersgroup-65J4GT/executeProcess',
+				headers: headers,
+				body: body
+			});
+			log.debug('response.code', response.code);
+
+			if (response.code === 200) {
+				log.debug('Boomi Job Triggered');
+			} else {
+				log.debug('Boomi Job: Some error has occurred. Please contact administrator');
+			}
+		}
+
+		function CreateHeaders(auth) {
+			var headers = {};
+			headers["content-type"] = 'application/json';
+			headers.Authorization = auth;
+			headers.Origin = 'https://netsuite.com';
+			headers['Access-Control-Request-Method'] = 'POST';
+			headers.accept = 'application/json';
+			return headers;
+		}
+
+		//this function checks if old parents are ready to pickup and change it to ready to delete
+		function updateParentsAlreadyInPickupStatus(parentPeriod) {
+			var stLogTitle = 'updateParentsAlreadyInPickupStatus';
+			try {
+				var searchId = runtime.getCurrentScript().getParameter('custscript_ss_parents_readytopickup');
+				var objSearch = search.load({ id: searchId });
+
+				var objFilter = search.createFilter({
+					name: 'custrecord_tm1dp_period',
+					operator: search.Operator.IS,
+					values: parentPeriod
+				});
+				objSearch.filters.push(objFilter);
+
+				var objFilter = search.createFilter({
+					name: 'custrecord_tm1dp_status',
+					operator: search.Operator.ANYOF,
+					values: FILE_CONST.TM1_PARENT_STATUS.READY_TO_PICKUP
+				});
+				objSearch.filters.push(objFilter);
+				var parents = [];
+				objSearch.run().each(function (result) {
+					var parentRecId = result.getValue({ name: 'internalid' });
+					parents.push(parentRecId);
+					record.submitFields({
+						type: FILE_CONST.REC_TM1_PARENT,
+						id: parentRecId,
+						values: {
+							custrecord_tm1dp_status: FILE_CONST.TM1_PARENT_STATUS.READY_TO_DELETE
+						}
+					});
+					return true;
+				});
+				return parents;
+			} catch (ex) {
+				log.error(stLogTitle, ex);
+			}
+		}
+
+		function searchSubsLocaMapping(stNSSubsidiary, stNSLocation) {
+
+			var stLogTitle = 'searchSubsLocaMapping';
+
+			try {
+
+				var searchId = runtime.getCurrentScript().getParameter('custscript_tmtgd_ss_subslocmapping');
+				//var searchId = 'customsearch_tlg_tbu_sublocmapp';
+				var objSearch = search.load({ id: searchId });
+
+				var objFilter = search.createFilter({
+					name: 'custrecord_subsidiary_code',
+					operator: search.Operator.IS,
+					values: stNSSubsidiary
+				});
+				objSearch.filters.push(objFilter);
+
+				var objFilter = search.createFilter({
+					name: 'custrecord_slm_location',
+					operator: search.Operator.ANYOF,
+					values: stNSLocation
+				});
+				objSearch.filters.push(objFilter);
+
+				return objSearch.run().getRange({ start: 0, end: 1 });
+
+			} catch (e) {
+				log.error(stLogTitle, e);
+			}
+		}
+
+		return {
+			getInputData: GetInputData,
+			map: Map,
+			reduce: Reduce,
+			summarize: Summarize
+		};
+	});
 
 
 function isEmpty(stValue) {
-    if ((stValue == '') || (stValue == null) || (stValue == undefined)) {
-        return true;
-    }
-    return false;
+	if ((stValue == '') || (stValue == null) || (stValue == undefined)) {
+		return true;
+	}
+	return false;
 }

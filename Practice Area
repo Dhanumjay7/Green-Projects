@@ -5,7 +5,7 @@
  */
 
 define([
-    'N/search','N/record','N/runtime','N/xml','N/file','N/render','N/url','N/encode','N/email','N/format','N/task'
+    'N/search', 'N/record', 'N/runtime', 'N/xml', 'N/file', 'N/render', 'N/url', 'N/encode', 'N/email', 'N/format', 'N/task'
 ], function (search, record, runtime, xmlMod, file, render, url, encode, email, format, task) {
 
     // constants (safe at module scope)
@@ -84,14 +84,14 @@ define([
 
             if (remaining < thresholdUsage || elapsed > thresholdTime) {
                 log.audit('Rescheduling triggered', 'Remaining=' + remaining + ', Elapsed(ms)=' + elapsed);
-                // pass last processed customer id to resume param (context.key is the grouping key)
-                rescheduleMapReduce(context.key);
+                if (lastProcessedCustomer) rescheduleMapReduce(lastProcessedCustomer);
                 return;
             }
 
             try {
                 var tranData = JSON.parse(context.values[i]).values;
                 var custId = tranData["GROUP(entity)"].value;
+                lastProcessedCustomer = custId; // mark as last processed
                 var statementDate = getStatementDate();
                 log.audit('Processing customer', custId);
 
@@ -653,11 +653,11 @@ define([
             var salesorderSearchObj = search.create({
                 type: 'salesorder',
                 filters: [
-                    ['type','anyof','SalesOrd'],
-                    'AND', ['mainline','is','T'],
-                    'AND', ['status','anyof','SalesOrd:B'],
-                    'AND', ['custbody_mes_invl_end_customer_link','isnotempty'],
-                    'AND', ['customermain.internalidnumber','equalto',custId]
+                    ['type', 'anyof', 'SalesOrd'],
+                    'AND', ['mainline', 'is', 'T'],
+                    'AND', ['status', 'anyof', 'SalesOrd:B'],
+                    'AND', ['custbody_mes_invl_end_customer_link', 'isnotempty'],
+                    'AND', ['customermain.internalidnumber', 'equalto', custId]
                 ],
                 columns: [
                     search.createColumn({ name: 'trandate', sort: search.Sort.ASC }),

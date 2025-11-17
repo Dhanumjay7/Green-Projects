@@ -98,9 +98,9 @@ define(['N/record', 'N/search', 'N/runtime', 'N/config', 'N/email', 'N/url', 'N/
 					// Ensure columns exist
 					var columns = searchTran.columns || [];
 
-					// -------------------- START: deterministic column rebuild + sorting --------------------
+					// -------------------- START: ensure EVERY column is recreated and sorted --------------------
 
-					// Helper: recreate a column with the same properties and an optional sort
+					// Helper to clone a column into a new search.createColumn with optional sort
 					function cloneColumnWithSort(col, sortDirection) {
 						var opts = {};
 						if (col.name) opts.name = col.name;
@@ -114,84 +114,52 @@ define(['N/record', 'N/search', 'N/runtime', 'N/config', 'N/email', 'N/url', 'N/
 						return search.createColumn(opts);
 					}
 
-					// CUSTOM ORDER — MODIFY ONLY IF CLIENT CHANGES REQUIREMENTS
-					var customSortMap = {
-						'Period': search.Sort.ASC,
-						'Account': search.Sort.ASC,
-						'Department': search.Sort.ASC,
-						'Location': search.Sort.ASC,
-						'Subsidiary': search.Sort.ASC,
-						'AMOUNT': search.Sort.DESC,
-						'Currency': search.Sort.ASC
-					};
+					// Heuristic to decide if a formula likely produces numeric/currency result
+					function isFormulaNumeric(col) {
+						if (!col.formula) return false;
+						var f = col.formula.toString().toLowerCase();
+						// look for numeric operations or currency/amount keywords
+						if (f.indexOf('{fxamount}') !== -1 || f.indexOf('amount') !== -1 ||
+							f.indexOf('sum(') !== -1 || f.indexOf('*') !== -1 ||
+							f.indexOf('exchangerate') !== -1 || f.indexOf('case when') !== -1) return true;
+						return false;
+					}
 
-					// Determine sort direction for each column
-					function determineSort(col) {
-						var lbl = (col.label || '').trim();
-						var nm = (col.name || '').trim();
-
-						if (customSortMap[lbl] !== undefined) return customSortMap[lbl];
-						if (customSortMap[nm] !== undefined) return customSortMap[nm];
-
+					// Decide sort for a column (applies to every column)
+					function decideSortForEveryColumn(col) {
+						// prefer any explicit summary value
 						if (col.summary === search.Summary.GROUP) return search.Sort.ASC;
-						if (col.summary === search.Summary.SUM) return search.Sort.DESC;
+						if (col.summary === search.Summary.SUM || col.summary === search.Summary.COUNT || col.summary === search.Summary.AVG) return search.Sort.DESC;
 
-						return null;
+						// formulas that appear numeric/currency -> DESC (common desire to show higher values first)
+						if (col.formula && isFormulaNumeric(col)) return search.Sort.DESC;
+
+						// fallback: ORDER non-summary columns ascending to keep deterministic behavior
+						return search.Sort.ASC;
 					}
 
 					if (columns && columns.length > 0) {
-
-						var finalOrder = [];
-						var usedIdx = {};
-
-						// Attach client-priority columns first (as ordered in customSortMap)
-						function findColumn(key) {
-							for (var i = 0; i < columns.length; i++) {
-								var c = columns[i];
-								if (!c) continue;
-
-								var lbl = (c.label || '').toLowerCase();
-								var nm = (c.name || '').toLowerCase();
-
-								if (lbl.indexOf(key.toLowerCase()) !== -1 || nm.indexOf(key.toLowerCase()) !== -1) {
-									return i;
-								}
-							}
-							return -1;
-						}
-
-						var sortKeys = Object.keys(customSortMap);
-						for (var s = 0; s < sortKeys.length; s++) {
-							var idx = findColumn(sortKeys[s]);
-							if (idx !== -1 && !usedIdx[idx]) {
-								usedIdx[idx] = true;
-								finalOrder.push(columns[idx]);
-							}
-						}
-
-						// Add remaining columns in original order
-						for (var j = 0; j < columns.length; j++) {
-							if (!usedIdx[j]) finalOrder.push(columns[j]);
-						}
-
-						// Recreate new columns with sort direction applied
+						// We'll preserve the original saved-search column order (so all 12 remain)
 						var newCols = [];
-						for (var i = 0; i < finalOrder.length; i++) {
-							var col = finalOrder[i];
-							var sortDir = determineSort(col);
-							newCols.push(cloneColumnWithSort(col, sortDir));
+						for (var i = 0; i < columns.length; i++) {
+							var oc = columns[i];
+							// decide a sort for this column
+							var sortForCol = decideSortForEveryColumn(oc);
+							// recreate the column with the sort
+							newCols.push(cloneColumnWithSort(oc, sortForCol));
 						}
 
+						// assign back to search
 						searchTran.columns = newCols;
-						// ---- DEBUG: PRINT SORTED COLUMNS ----
-						try {
-							log.debug("SORTED COLUMNS COUNT", newCols.length);
 
-							var colInfo = [];
-							for (var i = 0; i < newCols.length; i++) {
-								var c = newCols[i];
-								colInfo.push({
-									index: i,
+						// DEBUG LOG: show recreated columns and sort directions so you can confirm all 12
+						try {
+							log.debug("RECREATED COLUMNS COUNT", newCols.length);
+							var info = [];
+							for (var j = 0; j < newCols.length; j++) {
+								var c = newCols[j];
+								info.push({
+									index: j,
 									name: c.name || '',
 									label: c.label || '',
 									summary: c.summary || '',
@@ -199,15 +167,12 @@ define(['N/record', 'N/search', 'N/runtime', 'N/config', 'N/email', 'N/url', 'N/
 									sort: c.sort || 'NONE'
 								});
 							}
-
-							log.debug("SORTED COLUMN DETAILS", JSON.stringify(colInfo, null, 2));
-						} catch (e) {
-							log.error("LOGGING ERROR", e);
+							log.debug("RECREATED COLUMN DETAILS", JSON.stringify(info, null, 2));
+						} catch (err) {
+							log.error("LOG ERROR", err);
 						}
-
 					}
 
-					// -------------------- END: deterministic column rebuild + sorting --------------------
 
 
 				}

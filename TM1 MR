@@ -91,17 +91,14 @@ define(['N/record', 'N/search', 'N/runtime', 'N/config', 'N/email', 'N/url', 'N/
                         name: 'postingperiod', operator: (paramPeriod ? 'anyof' : 'is'),
                         values: (paramPeriod ? [paramPeriod] : ['TP'])
                     }));
-                    //return searchTran;
-                    //var filteredRes = searchTran.runPaged();
-                    //log.audit('stLogTitle', 'Results: ' + filteredRes.count);
+
 
                     // Ensure columns exist
+                    // -------------------- START: safe rebuild, preview and RETURN searchTran --------------------
                     var columns = searchTran.columns || [];
 
-
-                    // -------------------- SAFE: recreate every column + deterministic sorting --------------------
+                    // Safe recreate + deterministic sort
                     (function () {
-                        // Minimal property set for createColumn to avoid invalid/unsupported props
                         function safeCreateColumn(col, sortDirection) {
                             try {
                                 var opts = {};
@@ -114,7 +111,6 @@ define(['N/record', 'N/search', 'N/runtime', 'N/config', 'N/email', 'N/url', 'N/
                                 if (sortDirection) opts.sort = sortDirection;
                                 return search.createColumn(opts);
                             } catch (e) {
-                                // fallback: try a minimal column using only name/join/summary
                                 try {
                                     var fallback = {};
                                     if (col && col.name) fallback.name = col.name;
@@ -142,7 +138,6 @@ define(['N/record', 'N/search', 'N/runtime', 'N/config', 'N/email', 'N/url', 'N/
                             if (col.summary === search.Summary.GROUP) return search.Sort.ASC;
                             if (col.summary === search.Summary.SUM || col.summary === search.Summary.COUNT || col.summary === search.Summary.AVG) return search.Sort.DESC;
                             if (col.formula && looksNumericFormula(col)) return search.Sort.DESC;
-                            // fallback: make non-summary columns ASC for deterministic behavior
                             return search.Sort.ASC;
                         }
 
@@ -153,30 +148,21 @@ define(['N/record', 'N/search', 'N/runtime', 'N/config', 'N/email', 'N/url', 'N/
                                 var sortFor = decideSort(oc);
                                 var created = safeCreateColumn(oc, sortFor);
                                 if (created) newCols.push(created);
-                                else {
-                                    // if recreate failed, push the original column object as a last resort
-                                    newCols.push(oc);
-                                }
+                                else newCols.push(oc); // fallback to original object if recreate fails
                             }
 
-                            // final assignment with defensive try/catch
                             try {
                                 if (newCols.length > 0) searchTran.columns = newCols;
                             } catch (errAssign) {
                                 log.error('ASSIGN_COLS_ERROR', errAssign);
-                                // Keep original columns if assignment fails
-                                try {
-                                    searchTran.columns = columns;
-                                } catch (e2) {
-                                    log.error('ASSIGN_FALLBACK_ERROR', e2);
-                                }
+                                try { searchTran.columns = columns; } catch (e2) { log.error('ASSIGN_FALLBACK_ERROR', e2); }
                             }
 
                             // DEBUG: log resulting columns and sorts
                             try {
                                 var dbg = [];
-                                for (var j = 0; j < newCols.length; j++) {
-                                    var c = newCols[j];
+                                for (var j = 0; j < (searchTran.columns || []).length; j++) {
+                                    var c = searchTran.columns[j];
                                     dbg.push({
                                         idx: j,
                                         name: (c && c.name) || '',
@@ -192,6 +178,34 @@ define(['N/record', 'N/search', 'N/runtime', 'N/config', 'N/email', 'N/url', 'N/
                             }
                         }
                     })();
+
+                    // --- PREVIEW + DEBUG: confirm search has results and order (small range) ---
+                    try {
+                        var total = searchTran.runPaged().count;
+                        log.debug('FINAL SEARCH COUNT AFTER FILTERS', total);
+
+                        if (total > 0) {
+                            var preview = searchTran.run().getRange({ start: 0, end: 5 });
+                            var pretty = [];
+                            for (var p = 0; p < preview.length; p++) {
+                                var row = preview[p];
+                                var rowVals = {};
+                                for (var c = 0; c < row.columns.length; c++) {
+                                    var col = row.columns[c];
+                                    rowVals[col.label || col.name || ('col' + c)] = row.getText(col) || row.getValue(col);
+                                }
+                                pretty.push(rowVals);
+                            }
+                            log.debug('SEARCH PREVIEW (first 5 rows)', JSON.stringify(pretty, null, 2));
+                        }
+                    } catch (e) {
+                        log.error('PREVIEW_ERROR', e);
+                    }
+
+                    // *** IMPORTANT: return the searchTran so Map stage receives the (sorted) search results ***
+                    return searchTran;
+                    // -------------------- END: safe rebuild, preview and RETURN searchTran --------------------
+
 
                 }
             } catch (ex) {

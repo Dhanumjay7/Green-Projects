@@ -22,7 +22,7 @@ define([
             var s = runtime.getCurrentScript();
             return s ? s.getParameter({ name: name }) : null;
         } catch (e) {
-            log.debug('getScriptParam error', e);
+            log.audit('getScriptParam error', e);
             return null;
         }
     }
@@ -79,16 +79,7 @@ define([
         // for each reduce key (customer grouping)
         for (var i in context.values) {
             // governance/time check
-            var remaining = runtime.getCurrentScript().getRemainingUsage();
-            log.audit('Governance check', 'Remaining=' + remaining);
-            var elapsed = new Date().getTime() - startTime;
-            log.audit('Elapsed time (ms)', elapsed);
-
-            if (remaining < thresholdUsage || elapsed > thresholdTime) {
-                log.audit('Rescheduling triggered', 'Remaining=' + remaining + ', Elapsed(ms)=' + elapsed);
-                if (lastProcessedCustomer) rescheduleMapReduce(lastProcessedCustomer);
-                return;
-            }
+          
 
             try {
                 var tranData = JSON.parse(context.values[i]).values;
@@ -154,22 +145,6 @@ define([
         });
     }
 
-    /************** Reschedule helper **************/
-    function rescheduleMapReduce(lastProcessedCustomer) {
-        try {
-            log.audit('Rescheduling MR', 'from customer=' + lastProcessedCustomer);
-            var curScript = runtime.getCurrentScript();
-            var mrTask = task.create({ taskType: task.TaskType.MAP_REDUCE });
-            mrTask.scriptId = curScript.id;
-            mrTask.deploymentId = curScript.deploymentId;
-            mrTask.params = { custscript_resume_from_customer: lastProcessedCustomer || '' };
-            var taskId = mrTask.submit();
-            log.audit('Rescheduled MR', 'taskId=' + taskId + ' from customer=' + lastCustomerId);
-        } catch (e) {
-            log.error('Reschedule failed', e);
-        }
-    }
-
     /************** Build customer object (safe non-dynamic) **************/
     function buildCustomerObject(customerRecord, custId) {
         var obj = {};
@@ -231,8 +206,11 @@ define([
             var filtersOlder = [custIdFilter, dateFilterBefore, currencyFilter];
             var filtersNewer = [custIdFilter, dateFilterAfter, currencyFilter];
             var resultsOlder = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersOlder) || [];
+            log.audit('Results Older Count in gettrans', resultsOlder.length);
             var resultsNewer = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersNewer) || [];
+            log.audit('Results Newer Count in the get tran', resultsNewer.length);
             resultsAmount = resultsOlder.concat(resultsNewer);
+            log.audit('Total Results Count', resultsAmount.length);
         }
 
         return resultsAmount;
@@ -240,7 +218,7 @@ define([
 
     /************** getBalance **************/
     function getBalance(cname, resultsAmount, currency) {
-        log.debug('getBalance START', 'cname=' + cname + ' | currency=' + currency + ' | resultsAmount.length=' + (resultsAmount ? resultsAmount.length : 0));
+        log.audit('getBalance START', 'cname=' + cname + ' | currency=' + currency + ' | resultsAmount.length=' + (resultsAmount ? resultsAmount.length : 0));
         var clientBalance = 0;
         var typeCol = search.createColumn({ name: 'type' });
         var custDueDateCol = search.createColumn({ name: 'custbody_due_date' });
@@ -289,9 +267,9 @@ define([
 
         var amid1 = clientBalance.toFixed(2);
         var netAmount = formatAmount(amid1);
-        log.debug('getBalance of ', cname + ':' + netAmount);
+        log.audit('getBalance of ', cname + ':' + netAmount);
         if (netAmount === '0.00') {
-            log.debug('getBalance is zero!!!', 'Skip this customer ' + cname);
+            log.audit('getBalance is zero!!!', 'Skip this customer ' + cname);
             return '';
         }
 
@@ -330,6 +308,7 @@ define([
                     log.audit('runSearchPaged: low governance, stopping page fetch', 'remaining=' + remaining);
                     break;
                 }
+                log.audit('runSearchPaged complete', 'total results=' + allResults.length);
             }
         } catch (err) {
             // bubble up so caller can handle/reschedule
@@ -337,12 +316,13 @@ define([
             throw err;
         }
         return allResults;
+        log.audit('runSearchPaged complete', 'total results=' + allResults.length);
     }
 
     /************** createPDF (full pdf + excel creation) **************/
     function createPDF(cusObj, netAmount, resultsAmount, statementDate, currency) {
         try {
-            log.debug('createPDF START', 'netAmount=' + netAmount + ' | currency=' + currency);
+            log.audit('createPDF START', 'netAmount=' + netAmount + ' | currency=' + currency);
             var currencyObj = loadCurrency(currency);
             var currencySymbol = currencyObj.symbol;
             var currencyCode = currencyObj.code;
@@ -363,7 +343,7 @@ define([
             try {
                 img = (customerTemplate == brazilTemplate) ? file.load({ id: logoBrazil }) : file.load({ id: logoDefault });
             } catch (e) {
-                log.debug('logo load error', e);
+                log.audit('logo load error', e);
                 img = null;
             }
             var path = '';
@@ -421,7 +401,7 @@ define([
 
             // iterate results
             var resultsFinal = resultsAmount || [];
-            log.debug('# of statement lines', 'resultsFinal=' + resultsFinal.length);
+            log.audit('# of statement lines', 'resultsFinal=' + resultsFinal.length);
 
             for (var y = 0; resultsFinal != null && y < resultsFinal.length; y++) {
                 var resultsget = resultsFinal[y];
@@ -573,7 +553,7 @@ define([
                 record.attach({ record: { type: 'file', id: pdfFileId }, to: { type: 'customer', id: cname } });
                 record.attach({ record: { type: 'file', id: excelFileId }, to: { type: 'customer', id: cname } });
             } catch (attErr) {
-                log.debug('attach error', attErr);
+                log.audit('attach error', attErr);
             }
 
             var createdFiles = { pdf: pdfFileId, excel: excelFileId };
@@ -593,7 +573,7 @@ define([
             var arSpecialist = cusObj.arSpecialist;
             var customerEmail = cusObj.customerEmail || '';
             var customerTemplate = cusObj.customerTemplate;
-            log.debug('sendEmail cname=' + cname, 'fileIds: ' + attachmentArr);
+            log.audit('sendEmail cname=' + cname, 'fileIds: ' + attachmentArr);
 
             var emailTempId;
             if (customerTemplate == brazilTemplate) {
@@ -617,7 +597,7 @@ define([
                     var fileload = file.load({ id: attachmentArr[f] });
                     fileLoadArr.push(fileload);
                 } catch (flErr) {
-                    log.debug('file load error for ' + attachmentArr[f], flErr);
+                    log.audit('file load error for ' + attachmentArr[f], flErr);
                 }
             }
 
@@ -649,7 +629,7 @@ define([
             obj.code = rec.getValue({ fieldId: 'symbol' }) || '';
             return obj;
         } catch (e) {
-            log.debug('loadCurrency error', e);
+            log.audit('loadCurrency error', e);
             return { symbol: '$', code: '' };
         }
     }
@@ -680,7 +660,7 @@ define([
             }
             return payLinkURL;
         } catch (e) {
-            log.debug('getPayLinkURL error', e);
+            log.audit('getPayLinkURL error', e);
             return '';
         }
     }

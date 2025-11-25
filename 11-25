@@ -1,0 +1,774 @@
+/** 
+ * @NApiVersion 2.0
+ * @NScriptType MapReduceScript
+ * @NModuleScope SameAccount
+ */
+
+define([
+    'N/search', 'N/record', 'N/runtime', 'N/xml', 'N/file', 'N/render', 'N/url', 'N/encode', 'N/email', 'N/format', 'N/task'
+], function (search, record, runtime, xmlMod, file, render, url, encode, email, format, task) {
+
+    // constants (safe at module scope)
+    var defaultEmpID = 215516;
+    var folderID = 148222;
+    var templateDefault = 25;
+    var brazilTemplate = 26;
+    var logoDefault = '3662874';
+    var logoBrazil = '3662875';
+
+    // helper to read script parameter at runtime (safe)
+    function getScriptParam(name) {
+        try {
+            var s = runtime.getCurrentScript();
+            return s ? s.getParameter({ name: name }) : null;
+        } catch (e) {
+            log.audit('getScriptParam error', e);
+            return null;
+        }
+    }
+
+    function getFileConst() {
+        return {
+            SEARCH_INPUT: getScriptParam('custscript_weeklyst_searchinput'),
+            SEARCH_TRANSACTIONS: getScriptParam('custscript_weeklyst_searchtransactions'), // now unused, but kept for compatibility
+            ARRIVAL_DATE: getScriptParam('custscript_weeklyst_searcharrivaldate') || '',
+            RESUME_FROM_CUSTOMER: getScriptParam('custscript_resume_from_customer') || ''
+        };
+    }
+
+    /************** Entry point: getInputData **************/
+    function getInputData() {
+        var FILE_CONST = getFileConst();
+        log.audit("begin getInputData", new Date());
+        if (!FILE_CONST.SEARCH_INPUT) {
+            throw Error('Missing script parameter custscript_weeklyst_searchinput');
+        }
+        var statementSearch = search.load({ id: FILE_CONST.SEARCH_INPUT });
+
+        var defValue = getScriptParam('custscript_customerfilter');
+
+        if (defValue) {
+            var paramFilter = search.createFilter({
+                name: 'internalid',
+                join: 'customer',
+                operator: search.Operator.ANYOF,
+                values: defValue
+            });
+            statementSearch.filters.push(paramFilter);
+        }
+
+        if (FILE_CONST.RESUME_FROM_CUSTOMER) {
+            var resumeFilter = search.createFilter({
+                name: 'internalidnumber',
+                join: 'customer',
+                operator: search.Operator.GREATERTHAN,
+                values: FILE_CONST.RESUME_FROM_CUSTOMER
+            });
+            statementSearch.filters.push(resumeFilter);
+        }
+
+        return statementSearch;
+    }
+
+    /************** Entry point: reduce **************/
+    function reduce(context) {
+
+        for (var i in context.values) {
+
+            try {
+                var tranData = JSON.parse(context.values[i]).values;
+                log.audit('Processing reduce key', context.key);
+                log.audit('Processing reduce values', context.values[i]);
+                log.audit('Transaction Data in the loop', JSON.stringify(tranData));
+
+                var custId = tranData["GROUP(entity)"].value;
+
+                var statementDate = getStatementDate();
+                log.audit('Processing customer', custId);
+
+                var customerRecord = record.load({ type: 'customer', id: custId, isDynamic: false });
+                var cusObj = buildCustomerObject(customerRecord, custId);
+
+                var attachmentArr = [];
+                var currencyList = [1, 2, 4]; // USD, GBP, EUR - adjust ids if required
+
+                for (var c = 0; c < currencyList.length; c++) {
+                    var currency = currencyList[c];
+                    log.audit('Processing currency', currency);
+                    var resultsAmount = getTransactions(custId, currency);
+                    if (!resultsAmount || resultsAmount.length === 0) continue;
+
+                    var netAmount = getBalance(custId, resultsAmount, currency);
+                    if (!netAmount || parseFloat(netAmount) <= 0) continue;
+
+                    var files = createPDF(cusObj, netAmount, resultsAmount, statementDate, currency);
+                    if (files) {
+                        attachmentArr.push(files.pdf);
+                        attachmentArr.push(files.excel);
+                    }
+                }
+
+                if (attachmentArr.length) {
+                    sendEmail(cusObj, statementDate, attachmentArr);
+                    record.submitFields({
+                        type: 'customer',
+                        id: custId,
+                        values: { custentity_upaya_last_statement_date: statementDate }
+                    });
+                }
+
+                log.audit('Customer done', custId);
+
+            } catch (e) {
+                log.error('Reduce Error processing context', e);
+            }
+        }
+    }
+
+    /************** Entry point: summarize **************/
+    function summarize(summary) {
+        log.audit('Summary complete', JSON.stringify(summary));
+        if (summary.inputSummary.error)
+            log.error('Input Error', summary.inputSummary.error);
+
+        summary.reduceSummary.errors.iterator().each(function (key, error) {
+            log.error('Reduce Error for ' + key, error);
+            return true;
+        });
+    }
+
+    /************** Build customer object (safe non-dynamic) **************/
+    function buildCustomerObject(customerRecord, custId) {
+        var obj = {};
+        obj.cname = custId;
+        obj.customerName = customerRecord.getValue('isperson') ? customerRecord.getValue('altname') : customerRecord.getValue('companyname');
+        obj.arSpecialist = customerRecord.getValue('custentity_bonotel_ar_specialist');
+        obj.customerEmail = customerRecord.getValue('custentity_2663_email_address_notif') || '';
+        obj.customerTemplate = customerRecord.getValue('custentity_custom_email_template');
+
+        var addrCount = customerRecord.getLineCount({ sublistId: 'addressbook' });
+        for (var a = 0; a < addrCount; a++) {
+            var isDefaultBilling = customerRecord.getSublistValue({
+                sublistId: 'addressbook',
+                fieldId: 'defaultbilling',
+                line: a
+            });
+
+            if (isDefaultBilling) {
+                var addressSubrecord = customerRecord.getSublistSubrecord({
+                    sublistId: 'addressbook',
+                    fieldId: 'addressbookaddress',
+                    line: a
+                });
+
+                if (addressSubrecord) {
+                    obj.customeraddress = addressSubrecord.getValue({ fieldId: 'addr1' }) || '';
+                    obj.city = addressSubrecord.getValue({ fieldId: 'city' }) || '';
+                    obj.state = addressSubrecord.getValue({ fieldId: 'state' }) || '';
+                    obj.zip = addressSubrecord.getValue({ fieldId: 'zip' }) || '';
+                    obj.country = addressSubrecord.getValue({ fieldId: 'country' }) || '';
+                }
+                break;
+            }
+        }
+
+        return obj;
+    }
+
+    /************** getTransactions **************/
+    function getTransactions(cname, currency) {
+        var FILE_CONST = getFileConst();
+        var common = [
+            ['customermain.internalidnumber', 'equalto', String(cname)],
+            'AND', ['subsidiary', 'anyof', '33'],
+            'AND', ['mainline', 'is', 'T'],
+            'AND', ['customer.custentity_upaya_last_statement_date', 'noton', 'today'],
+            'AND', ['customer.custentity_2663_email_address_notif', 'isnotempty', ''],
+            'AND', ['currency', 'anyof', String(currency)]
+        ];
+
+        if (!isEmpty(FILE_CONST.ARRIVAL_DATE)) {
+            common.push('AND');
+            common.push(['custbody_arrival_date', 'onorafter', FILE_CONST.ARRIVAL_DATE]);
+        }
+
+        var filtersSO = common.concat([
+            'AND', ['type', 'anyof', 'SalesOrd'],
+            'AND', [
+                ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
+                'OR',
+                ['custbody_due_date', 'notafter', 'daysfromnow45']
+            ],
+            'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+            'AND', ['custbody_due_date', 'isnotempty', ''],
+            'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
+            'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
+        ]);
+
+        var filtersInvPT2 = common.concat([
+            'AND', ['type', 'anyof', 'CustInvc'],
+            'AND', [
+                ['duedate', 'notafter', 'daysfromnow45'],
+                'OR',
+                ['custbody_arrival_date', 'notafter', 'daysfromnow45']
+            ],
+            'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+            'AND', ['status', 'anyof', 'CustInvc:A']
+        ]);
+
+        var filtersInvPT1 = common.concat([
+            'AND', ['type', 'anyof', 'CustInvc'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '1'],
+            'AND', ['status', 'anyof', 'CustInvc:A']
+        ]);
+
+        var resultsAmount = [];
+
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO));
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2));
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1));
+
+        log.audit('getTransactions', 'customer=' + cname + ' currency=' + currency +
+            ' | total=' + resultsAmount.length);
+
+        return resultsAmount;
+    }
+
+    /************** getBalance **************/
+    function getBalance(cname, resultsAmount, currency) {
+        log.audit('getBalance START', 'cname=' + cname + ' | currency=' + currency + ' | resultsAmount.length=' + (resultsAmount ? resultsAmount.length : 0));
+        var clientBalance = 0;
+        var typeCol = search.createColumn({ name: 'type' });
+        var custDueDateCol = search.createColumn({ name: 'custbody_due_date' });
+        var dueDateCol = search.createColumn({ name: 'duedate' });
+        var remaining, dueDate, checkDueDate = false;
+
+        for (var aa = 0; resultsAmount != null && aa < resultsAmount.length; aa++) {
+            var resultsGetAmount = resultsAmount[aa];
+            var _type = resultsGetAmount.getValue(typeCol);
+            var depamt = parseFloat(resultsGetAmount.getValue('custbody_total_earmarks')) || 0;
+            var amt;
+            if (currency == 1) {
+                amt = parseFloat(resultsGetAmount.getValue('amount')) || 0;
+            } else {
+                amt = parseFloat(resultsGetAmount.getValue('fxamount')) || 0;
+            }
+
+            if (_type == 'SalesOrd') {
+                remaining = getnumber(amt) - getnumber(depamt);
+            } else {
+                if (currency == 1) {
+                    remaining = parseFloat(resultsGetAmount.getValue('amountremaining')) || 0;
+                } else {
+                    remaining = parseFloat(resultsGetAmount.getValue('fxamountremaining')) || 0;
+                }
+            }
+
+            var prepayVal = resultsGetAmount.getValue(custDueDateCol);
+            dueDate = !isEmpty(prepayVal) ? prepayVal : resultsGetAmount.getValue(dueDateCol);
+
+            if (!dueDate) {
+                checkDueDate = true;
+                log.audit("setting check due date to true", resultsGetAmount.id || 'no id');
+                break;
+            }
+
+            if (remaining > 0) {
+                clientBalance = clientBalance + remaining;
+            }
+        }
+
+        if (checkDueDate) {
+            return;
+        }
+
+        var amid1 = clientBalance.toFixed(2);
+        var netAmount = formatAmount(amid1);
+        log.audit('getBalance of ', cname + ':' + netAmount);
+        if (netAmount === '0.00') {
+            log.audit('getBalance is zero!!!', 'Skip this customer ' + cname);
+            return '';
+        }
+
+        return netAmount;
+    }
+
+    /************** columns for transaction search **************/
+    var TRANSACTION_COLUMNS = [
+        search.createColumn({ name: 'internalid' }),
+        search.createColumn({ name: 'entity' }),
+        search.createColumn({ name: 'amount' }),
+        search.createColumn({ name: 'custbody_total_earmarks' }),
+        search.createColumn({ name: 'type' }),
+        search.createColumn({ name: 'custentity_payment_type', join: 'customer' }),
+        search.createColumn({ name: 'custbody_booking_number' }),
+        search.createColumn({ name: 'custbody_booking_status' }),
+        search.createColumn({ name: 'custbody_guest_names' }),
+        search.createColumn({ name: 'custbody_arrival_date' }),
+        search.createColumn({ name: 'custbody_departure_date' }),
+        search.createColumn({ name: 'custbody_tour_operator_order_number' }),
+        search.createColumn({ name: 'custentity_2663_email_address_notif', join: 'customer' }),
+        search.createColumn({ name: 'custbody_due_date' }),
+        search.createColumn({ name: 'custbody_provider_id' }),
+        search.createColumn({ name: 'duedate' }),
+        search.createColumn({ name: 'amountremaining' }),
+        search.createColumn({ name: 'fxamount' }),
+        search.createColumn({ name: 'fxamountremaining' }),
+        search.createColumn({ name: 'currency' }),
+        search.createColumn({ name: 'altname', join: 'CUSTBODY_CUSTOMER_ACCOUNT' }),
+        search.createColumn({ name: 'name', join: 'CUSTBODY_TRANSACTION_RESERVATION_LINK' }),
+        search.createColumn({ name: 'tranid' })
+    ];
+
+    function runTransactionSearch(filters) {
+        var allResults = [];
+
+        var s = search.create({
+            type: 'transaction',
+            filters: filters,
+            columns: TRANSACTION_COLUMNS
+        });
+
+        var paged = s.runPaged({ pageSize: 500 });
+        paged.pageRanges.forEach(function (pr) {
+            var page = paged.fetch({ index: pr.index });
+            page.data.forEach(function (res) {
+                allResults.push(res);
+            });
+        });
+
+        return allResults;
+    }
+
+    /************** createPDF (unchanged except for using getPayLinkURL) **************/
+    function createPDF(cusObj, netAmount, resultsAmount, statementDate, currency) {
+        try {
+            log.audit('createPDF START', 'netAmount=' + netAmount + ' | currency=' + currency);
+            var currencyObj = loadCurrency(currency);
+            var currencySymbol = currencyObj.symbol;
+            var currencyCode = currencyObj.code;
+
+            var cname = cusObj.cname;
+            var customerName = cusObj.customerName || '';
+            var customerTemplate = cusObj.customerTemplate;
+            var customeraddress = cusObj.customeraddress || '';
+            var city = cusObj.city || '';
+            var state = cusObj.state || '';
+            var zip = cusObj.zip || '';
+            var country = cusObj.country || '';
+
+            var today = getTimestamp();
+
+            var img;
+            try {
+                img = (customerTemplate == brazilTemplate) ? file.load({ id: logoBrazil }) : file.load({ id: logoDefault });
+            } catch (e) {
+                log.audit('logo load error', e);
+                img = null;
+            }
+            var path = '';
+            if (img) {
+                path = xmlMod.escape({ xmlText: img.url });
+            }
+
+            var strNamePic = "<table>";
+            strNamePic += "<tr><td>";
+            strNamePic += "<img src=\"" + path + "\"></img>";
+            strNamePic += "</td></tr></table>";
+
+            var strName = "<table>";
+            strName += "<tr><td></td><td>Customer:</td><td>" + xmlMod.escape({ xmlText: customerName }) + "</td></tr>";
+            strName += "<tr><td></td><td>Address:</td><td>" + xmlMod.escape({ xmlText: customeraddress }) + "</td></tr>";
+            strName += "<tr><td></td><td>City:</td><td>" + xmlMod.escape({ xmlText: city }) + "</td></tr>";
+            strName += "<tr><td></td><td>State:</td><td>" + xmlMod.escape({ xmlText: state }) + "</td></tr>";
+            strName += "<tr><td></td><td>Country:</td><td>" + xmlMod.escape({ xmlText: country }) + "</td></tr>";
+            strName += "<tr><td></td><td>ZipCode:</td><td>" + xmlMod.escape({ xmlText: zip }) + "</td></tr>";
+            strName += "<tr><td></td><td>Statement Date:</td><td>" + statementDate + "</td></tr>";
+            strName += "<tr><td></td><td>Amount Due:</td><td>" + currencySymbol + " " + netAmount + "</td></tr>";
+            strName += "</table>";
+
+            var strName2 = '<table width="100%" border="1" style="border-color: #808080; border-collapse:collapse;">';
+            strName2 += '<thead>';
+            strName2 += '<tr style="font-weight:bold; font-size:8px; background-color:Gray; color:#FFFFFF;">';
+            strName2 += '<th>Hotel Name</th><th>Account #</th><th>Reservation #</th><th>Your Ref. #</th><th>Arrival</th><th>Departure</th><th>Guest(s) Name</th><th>Due Date</th><th>Reservation Value</th><th>Amount Due</th>';
+            strName2 += '</tr></thead>';
+
+            var xmlString = '<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?>';
+            xmlString += '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40">';
+            xmlString += '<Worksheet ss:Name="Sheet1"><Table>';
+            xmlString += '<Row><Cell><Data ss:Type="String">Name</Data></Cell><Cell><Data ss:Type="String">' + customerName + '</Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">Address</Data></Cell><Cell><Data ss:Type="String">' + customeraddress + '</Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">City</Data></Cell><Cell><Data ss:Type="String">' + city + '</Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">State</Data></Cell><Cell><Data ss:Type="String">' + state + '</Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">Country</Data></Cell><Cell><Data ss:Type="String">' + country + '</Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">ZipCode</Data></Cell><Cell><Data ss:Type="String">' + zip + '</Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String"> </Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">Statement Date:</Data></Cell><Cell><Data ss:Type="String">' + statementDate + '</Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">Amount Due</Data></Cell><Cell><Data ss:Type="String">' + currencySymbol + '  ' + netAmount + '</Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String"> </Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">Hotel Name</Data></Cell><Cell><Data ss:Type="String">Account #</Data></Cell><Cell><Data ss:Type="String">Invoice #</Data></Cell><Cell><Data ss:Type="String">Reservation #</Data></Cell><Cell><Data ss:Type="String">Your Ref. #</Data></Cell><Cell><Data ss:Type="String">Arrival</Data></Cell><Cell><Data ss:Type="String">Departure</Data></Cell><Cell><Data ss:Type="String">Guest(s) Name</Data></Cell><Cell><Data ss:Type="String">Due Date</Data></Cell><Cell><Data ss:Type="String">Reservation Value</Data></Cell><Cell><Data ss:Type="String">Amount Due</Data></Cell></Row>';
+
+            var agingCurrent = 0.00;
+            var agingStage1 = 0.00;
+            var agingStage2 = 0.00;
+            var agingStage3 = 0.00;
+            var agingStage4 = 0.00;
+            var agingStage5 = 0.00;
+
+            var resultsFinal = resultsAmount || [];
+            log.audit('# of statement lines', 'resultsFinal=' + resultsFinal.length);
+
+            for (var y = 0; resultsFinal != null && y < resultsFinal.length; y++) {
+                var resultsget = resultsFinal[y];
+
+                var amount;
+                if (currency != 1) {
+                    amount = resultsget.getValue('fxamount') || resultsget.getValue('amount') || 0;
+                } else {
+                    amount = resultsget.getValue('amount') || resultsget.getValue('fxamount') || 0;
+                }
+
+                var booknum = resultsget.getValue({ name: 'name', join: 'CUSTBODY_TRANSACTION_RESERVATION_LINK' }) || resultsget.getValue({ name: 'custbody_booking_number' });
+                var guest = resultsget.getValue({ name: "custbody_guest_names" }) || '';
+                var arrival = resultsget.getValue({ name: "custbody_arrival_date" }) || '';
+                var departure = resultsget.getValue({ name: "custbody_departure_date" }) || '';
+                var provider = resultsget.getText({ name: "custbody_provider_id" }) || '';
+                var account = resultsget.getValue({ name: "altname", join: "CUSTBODY_CUSTOMER_ACCOUNT" }) || '';
+                var rez = resultsget.getValue({ name: "name", join: "CUSTBODY_TRANSACTION_RESERVATION_LINK" });
+                if (!rez || rez === "- None -") {
+                    rez = resultsget.getValue({ name: "custbody_booking_number" }) || '';
+                }
+                booknum = rez;
+                var tranId = resultsget.getValue({ name: "tranid" }) || '';
+                if (currency != 1) {
+                    amount = resultsget.getValue({ name: "fxamount" }) || amount;
+                } else {
+                    amount = resultsget.getValue({ name: "amount" }) || amount;
+                }
+
+                guest = resultsget.getValue({ name: "custbody_guest_names" }) || '';
+                var depositamount = resultsget.getValue({ name: "custbody_total_earmarks" }) || 0;
+                var amountRem = 0.00;
+                var type = resultsget.getValue({ name: "type" }) || '';
+
+                var dueDate = '';
+                if (type == 'SalesOrd') {
+                    tranId = '';
+                    dueDate = resultsget.getValue({ name: "custbody_due_date" }) || '';
+                    amountRem = getnumber(amount) - getnumber(depositamount);
+                } else {
+                    dueDate = resultsget.getValue({ name: "custbody_due_date" }) || resultsget.getValue({ name: "duedate" }) || '';
+                    if (currency != 1) {
+                        amountRem = getnumber(resultsget.getValue({ name: "fxamountremaining" })) || 0;
+                    } else {
+                        amountRem = getnumber(resultsget.getValue({ name: "amountremaining" })) || 0;
+                    }
+                }
+
+                var refNo = resultsget.getValue({ name: "custbody_tour_operator_order_number" }) || '';
+
+                if (amountRem > 0) {
+                    var agingdays = 0;
+                    if (dueDate) agingdays = days_between(statementDate, dueDate);
+                    if (agingdays == 0 || agingdays < 0) { agingCurrent += getnumber(amountRem); }
+                    else if (agingdays <= 30 && agingdays >= 1) { agingStage1 += getnumber(amountRem); }
+                    else if (agingdays <= 60 && agingdays >= 31) { agingStage2 += getnumber(amountRem); }
+                    else if (agingdays <= 90 && agingdays >= 61) { agingStage3 += getnumber(amountRem); }
+                    else if (agingdays >= 90) { agingStage4 += getnumber(amountRem); }
+                    agingStage5 += getnumber(amountRem);
+
+                    xmlString += '<Row>';
+                    xmlString += '<Cell><Data ss:Type="String">' + (provider || '') + '</Data></Cell>';
+                    xmlString += '<Cell><Data ss:Type="String">' + (account || '') + '</Data></Cell>';
+                    xmlString += '<Cell><Data ss:Type="String">' + (tranId || '') + '</Data></Cell>';
+                    xmlString += '<Cell><Data ss:Type="String">' + (booknum || '') + '</Data></Cell>';
+                    xmlString += '<Cell><Data ss:Type="String">' + (refNo || '') + '</Data></Cell>';
+                    xmlString += '<Cell><Data ss:Type="String">' + (arrival || '') + '</Data></Cell>';
+                    xmlString += '<Cell><Data ss:Type="String">' + (departure || '') + '</Data></Cell>';
+                    xmlString += '<Cell><Data ss:Type="String">' + (guest || '') + '</Data></Cell>';
+                    xmlString += '<Cell><Data ss:Type="String">' + (dueDate || '') + '</Data></Cell>';
+                    xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(amount) + '</Data></Cell>';
+                    xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(amountRem) + '</Data></Cell>';
+                    xmlString += '</Row>';
+
+                    strName2 += "<tr>";
+                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: provider }) + '</td>';
+                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: account }) + '</td>';
+                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: booknum }) + '</td>';
+                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: refNo }) + '</td>';
+                    strName2 += '<td>' + (arrival || '') + '</td>';
+                    strName2 += '<td>' + (departure || '') + '</td>';
+                    strName2 += '<td>' + xmlMod.escape({ xmlText: guest }) + '</td>';
+                    strName2 += '<td>' + (dueDate || '') + '</td>';
+                    strName2 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(amount) + '</td>';
+                    strName2 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(amountRem) + '</td>';
+                    strName2 += "</tr><tr></tr>";
+                }
+            }
+
+            xmlString += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">Aging</Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">Current</Data></Cell><Cell><Data ss:Type="String">1-30 Days</Data></Cell><Cell><Data ss:Type="String">31-60 Days</Data></Cell><Cell><Data ss:Type="String">61-90 Days</Data></Cell><Cell><Data ss:Type="String">Over 90 Days</Data></Cell><Cell><Data ss:Type="String">Total</Data></Cell></Row>';
+            xmlString += '<Row><Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(agingCurrent.toFixed(2)) + '</Data></Cell>';
+            xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(agingStage1.toFixed(2)) + '</Data></Cell>';
+            xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(agingStage2.toFixed(2)) + '</Data></Cell>';
+            xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(agingStage3.toFixed(2)) + '</Data></Cell>';
+            xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(agingStage4.toFixed(2)) + '</Data></Cell>';
+            xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(agingStage5.toFixed(2)) + '</Data></Cell></Row>';
+            xmlString += '</Table></Worksheet></Workbook>';
+
+            var strXmlEncoded = encode.convert({ string: xmlString, inputEncoding: encode.Encoding.UTF_8, outputEncoding: encode.Encoding.BASE_64 });
+            var objXlsFile = file.create({
+                name: (currency == 2 ? 'ExcelGBP_' : 'ExcelUSD_') + customerName + '_' + today + '.xls',
+                fileType: file.Type.EXCEL,
+                contents: strXmlEncoded
+            });
+            objXlsFile.folder = folderID;
+            var excelFileId = objXlsFile.save();
+
+            strName2 += '</table>';
+            var strNameSpace = '<table><tr><td></td><td></td><td></td></tr></table>';
+            var strName3 = '<table width="100%" border="1" style="border-color:#808080;border-collapse:collapse;"><tr style="font-weight:bold;background-color:Gray;color:#FFFFFF;"><th>Current</th><th>1-30 Days</th><th>31-60 Days</th><th>61-90 Days</th><th>Over 90 Days</th><th>Total</th></tr>';
+            strName3 += '<tr>';
+            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingCurrent.toFixed(2)) + '</td>';
+            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage1.toFixed(2)) + '</td>';
+            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage2.toFixed(2)) + '</td>';
+            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage3.toFixed(2)) + '</td>';
+            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage4.toFixed(2)) + '</td>';
+            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage5.toFixed(2)) + '</td>';
+            strName3 += '</tr></table>';
+
+            var payLinkURL = getPayLinkURL(cname);
+            var strPayLink = '<table width="100%" style="margin-top:30px"><tr style="font-size:12px;color:blue"><td align="right">';
+            if (!isEmpty(payLinkURL)) {
+                var payLinkPath = xmlMod.escape({ xmlText: payLinkURL });
+                strPayLink += '<a href="' + payLinkPath + '">Click Here to Pay</a>';
+            }
+            strPayLink += '</td></tr></table>';
+
+            var xml = "<?xml version=\"1.0\"?>\n<!DOCTYPE pdf PUBLIC \"-//big.faceless.org//report\" \"report-1.1.dtd\">\n";
+            xml += "<pdf>\n<head>\n<macrolist>\n<macro id=\"myheader\"><p align=\"left\">" + strNamePic + "</p></macro>\n<macro id=\"myfooter\"><p align=\"right\">Page <pagenumber/> of <totalpages/></p></macro>\n</macrolist>\n</head>\n";
+            xml += '<body font-size="7" header="myheader" header-height="20mm" footer="myfooter" footer-height="20mm">';
+            xml += strName + strName2 + strNameSpace + strName3 + strPayLink;
+            xml += '</body></pdf>';
+
+            var pdfFile = render.xmlToPdf({ xmlString: xml });
+            pdfFile.folder = folderID;
+            pdfFile.name = 'PDF' + currencyCode + '_' + customerName + '_' + today + '.pdf';
+            var pdfFileId = pdfFile.save();
+
+            try {
+                record.attach({ record: { type: 'file', id: pdfFileId }, to: { type: 'customer', id: cname } });
+                record.attach({ record: { type: 'file', id: excelFileId }, to: { type: 'customer', id: cname } });
+            } catch (attErr) {
+                log.audit('attach error', attErr);
+            }
+
+            var createdFiles = { pdf: pdfFileId, excel: excelFileId };
+            return createdFiles;
+
+        } catch (err) {
+            log.error('createPDF error', err);
+            return null;
+        }
+    }
+
+    /************** sendEmail **************/
+    function sendEmail(cusObj, statementDate, attachmentArr) {
+        try {
+            var cname = cusObj.cname;
+            var customerName = cusObj.customerName;
+            var arSpecialist = cusObj.arSpecialist;
+            var customerEmail = cusObj.customerEmail || '';
+            var customerTemplate = cusObj.customerTemplate;
+            log.audit('sendEmail cname=' + cname, 'fileIds: ' + attachmentArr);
+
+            var emailTempId;
+            if (customerTemplate == brazilTemplate) {
+                emailTempId = brazilTemplate;
+            } else {
+                if (customerTemplate && customerTemplate.length > 0) {
+                    emailTempId = parseInt(customerTemplate);
+                } else {
+                    emailTempId = templateDefault;
+                }
+            }
+
+            var emailTemp = record.load({ type: 'emailtemplate', id: emailTempId });
+            var emailBody = emailTemp.getValue('content') || '';
+
+            var custArray = customerEmail.split(';').map(function (v) { return v.trim(); }).filter(function (v) { return v; });
+
+            var fileLoadArr = [];
+            for (var f = 0; f < attachmentArr.length; f++) {
+                try {
+                    var fileload = file.load({ id: attachmentArr[f] });
+                    fileLoadArr.push(fileload);
+                } catch (flErr) {
+                    log.audit('file load error for ' + attachmentArr[f], flErr);
+                }
+            }
+
+            var emailSubject = (customerName || '') + ' Statements for ' + statementDate;
+
+            email.send({
+                author: defaultEmpID,
+                recipients: custArray,
+                subject: emailSubject,
+                body: emailBody,
+                attachments: fileLoadArr,
+                relatedRecords: { entityId: cname }
+            });
+
+            log.audit('EMAIL SENT cname=' + cname, emailSubject);
+            return true;
+        } catch (e) {
+            log.error('sendEmail error', e);
+            return false;
+        }
+    }
+
+    /************** loadCurrency **************/
+    function loadCurrency(currencyId) {
+        try {
+            var rec = record.load({ type: 'currency', id: currencyId });
+            var obj = {};
+            obj.symbol = rec.getValue({ fieldId: 'displaysymbol' }) || '$';
+            obj.code = rec.getValue({ fieldId: 'symbol' }) || '';
+            return obj;
+        } catch (e) {
+            log.audit('loadCurrency error', e);
+            return { symbol: '$', code: '' };
+        }
+    }
+
+    /************** getPayLinkURL (FIXED) **************/
+    function getPayLinkURL(cname) {
+        try {
+            var payLinkURL = '';
+
+            // Build filters as real Filter objects so "filters is expected as Array" never happens
+            var filters = [
+                search.createFilter({
+                    name: 'type',
+                    operator: search.Operator.ANYOF,
+                    values: 'SalesOrd'
+                }),
+                search.createFilter({
+                    name: 'mainline',
+                    operator: search.Operator.IS,
+                    values: 'T'
+                }),
+                search.createFilter({
+                    name: 'status',
+                    operator: search.Operator.ANYOF,
+                    values: 'SalesOrd:B'
+                }),
+                search.createFilter({
+                    name: 'custbody_mes_invl_end_customer_link',
+                    operator: search.Operator.ISNOTEMPTY
+                    // no values needed
+                }),
+                search.createFilter({
+                    name: 'internalidnumber',
+                    join: 'customerMain',
+                    operator: search.Operator.EQUALTO,
+                    values: String(cname)
+                })
+            ];
+
+            var salesorderSearchObj = search.create({
+                type: search.Type.SALES_ORDER,
+                filters: filters,
+                columns: [
+                    search.createColumn({ name: 'trandate', sort: search.Sort.ASC }),
+                    search.createColumn({ name: 'tranid' }),
+                    search.createColumn({ name: 'custbody_mes_invl_end_customer_link' })
+                ]
+            });
+
+            var searchResultCount = salesorderSearchObj.runPaged().count;
+            if (searchResultCount > 0) {
+                var searchResult = salesorderSearchObj.run().getRange({ start: 0, end: 1 });
+                payLinkURL = searchResult[0].getValue({ name: 'custbody_mes_invl_end_customer_link' }) || '';
+            }
+            return payLinkURL;
+        } catch (e) {
+            log.audit('getPayLinkURL error', e);
+            return '';
+        }
+    }
+
+    /************** utilities **************/
+    function isEmpty(param) {
+        return (param === '' || param === null || param === undefined);
+    }
+
+    function getnumber(id) {
+        var ret = parseFloat(id);
+        if (isNaN(ret)) ret = 0;
+        return ret;
+    }
+
+    function formatAmount(nStr) {
+        nStr = (nStr === null || nStr === undefined) ? '0' : String(nStr);
+        var x = nStr.split('.');
+        var x1 = x[0];
+        var x2 = x.length > 1 ? '.' + x[1] : '';
+        var rgx = /(\d+)(\d{3})/;
+        while (rgx.test(x1)) {
+            x1 = x1.replace(rgx, '$1' + ',' + '$2');
+        }
+        return x1 + x2;
+    }
+
+    function formatMoney(number, places, symbol, thousand, decimal) {
+        number = number || 0;
+        places = !isNaN(Math.abs(places || 2)) ? Math.abs(places || 2) : 2;
+        thousand = thousand || ",";
+        decimal = decimal || ".";
+        var negative = number < 0 ? "-" : "";
+        var i = parseInt(number = Math.abs(+number || 0).toFixed(places), 10) + "";
+        var j = (j = i.length) > 3 ? j % 3 : 0;
+        return negative + (j ? i.substr(0, j) + thousand : "") +
+            i.substr(j).replace(/(\d{3})(?=\d)/g, "$1" + thousand) +
+            (places ? decimal + Math.abs(number - i).toFixed(places).slice(2) : "");
+    }
+
+    function days_between(date1, date2) {
+        var ONE_DAY = 1000 * 60 * 60 * 24;
+        var date1_date = (typeof date1 === "string") ? format.parse({ value: date1, type: format.Type.DATE }) : date1;
+        var date2_date = (typeof date2 === "string") ? format.parse({ value: date2, type: format.Type.DATE }) : date2;
+        var date1_ms = date1_date.getTime();
+        var date2_ms = date2_date.getTime();
+        var difference_ms = (date1_ms - date2_ms);
+        return Math.round(difference_ms / ONE_DAY);
+    }
+
+    function getStatementDate() {
+        var now = new Date();
+        var year = "" + now.getFullYear();
+        var month = "" + (now.getMonth() + 1); if (month.length === 1) month = "0" + month;
+        var day = "" + now.getDate(); if (day.length === 1) day = "0" + day;
+        return month + '/' + day + '/' + year;
+    }
+
+    function getTimestamp() {
+        var now = new Date();
+        var year = "" + now.getFullYear();
+        var month = "" + (now.getMonth() + 1); if (month.length === 1) month = "0" + month;
+        var day = "" + now.getDate(); if (day.length === 1) day = "0" + day;
+        var hour = "" + now.getHours(); if (hour.length === 1) hour = "0" + hour;
+        var minute = "" + now.getMinutes(); if (minute.length === 1) minute = "0" + minute;
+        var second = "" + now.getSeconds(); if (second.length === 1) second = "0" + second;
+        return year + month + day + hour + minute + second;
+    }
+
+    return {
+        getInputData: getInputData,
+        reduce: reduce,
+        summarize: summarize
+    };
+});

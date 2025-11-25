@@ -30,7 +30,7 @@ define([
     function getFileConst() {
         return {
             SEARCH_INPUT: getScriptParam('custscript_weeklyst_searchinput'),
-            SEARCH_TRANSACTIONS: getScriptParam('custscript_weeklyst_searchtransactions'),
+            SEARCH_TRANSACTIONS: getScriptParam('custscript_weeklyst_searchtransactions'), // now unused, but kept for compatibility
             ARRIVAL_DATE: getScriptParam('custscript_weeklyst_searcharrivaldate') || '',
             RESUME_FROM_CUSTOMER: getScriptParam('custscript_resume_from_customer') || ''
         };
@@ -73,10 +73,7 @@ define([
     /************** Entry point: reduce **************/
     function reduce(context) {
 
-        // for each reduce key (customer grouping)
         for (var i in context.values) {
-            // governance/time check
-
 
             try {
                 var tranData = JSON.parse(context.values[i]).values;
@@ -106,7 +103,6 @@ define([
 
                     var files = createPDF(cusObj, netAmount, resultsAmount, statementDate, currency);
                     if (files) {
-                        // files.pdf = pdf file internal id, files.excel = excel internal id
                         attachmentArr.push(files.pdf);
                         attachmentArr.push(files.excel);
                     }
@@ -114,7 +110,6 @@ define([
 
                 if (attachmentArr.length) {
                     sendEmail(cusObj, statementDate, attachmentArr);
-                    // mark last statement date
                     record.submitFields({
                         type: 'customer',
                         id: custId,
@@ -180,7 +175,7 @@ define([
         return obj;
     }
 
-    /************** getTransactions (uses paged search) **************/
+    /************** getTransactions (uses custom search, not saved search) **************/
     function getTransactions(cname, currency) {
         var FILE_CONST = getFileConst();
         var startdate = new Date(2016, 0, 1);
@@ -243,7 +238,6 @@ define([
                 }
             }
 
-            // use prepay due date if present
             var prepayVal = resultsGetAmount.getValue(custDueDateCol);
             dueDate = !isEmpty(prepayVal) ? prepayVal : resultsGetAmount.getValue(dueDateCol);
 
@@ -273,46 +267,62 @@ define([
         return netAmount;
     }
 
-    /************** runSearchPaged - safe paging using runPaged **************/
+    /************** runSearchPaged - NEW: simple search.create instead of saved search **************/
     function runSearchPaged(recType, searchId, filters) {
-        if (!recType && !searchId) return [];
+        // We IGNORE searchId here on purpose to avoid the heavy saved search
+        // and create a light-weight transaction search with only the columns we really need.
 
-        var searchRec;
-        if (searchId) {
-            searchRec = search.load({ id: searchId });
-            if (filters && filters.length) {
-                for (var f = 0; f < filters.length; f++) {
-                    searchRec.filters.push(filters[f]);
-                }
-            }
-            log.audit('runSearchPaged loaded search', 'id=' + searchId + ' | filters added=' + (filters ? filters.length : 0));
-        } else {
-            searchRec = search.create({ type: recType, filters: filters });
-        }
+        var recTypeFinal = recType || 'transaction';
+        var filtersFinal = filters ? filters.slice(0) : [];
+
+        // Force mainline = F to work at line level (avoids duplicates on summary/main lines)
+        filtersFinal.push(search.createFilter({
+            name: 'mainline',
+            operator: 'is',
+            values: 'F'
+        }));
+
+        var searchRec = search.create({
+            type: recTypeFinal,
+            filters: filtersFinal,
+            columns: [
+                'internalid',
+                'type',
+                'tranid',
+                'amount',
+                'fxamount',
+                'amountremaining',
+                'fxamountremaining',
+                'duedate',
+                'currency',
+                'custbody_arrival_date',
+                'custbody_departure_date',
+                'custbody_total_earmarks',
+                'custbody_tour_operator_order_number',
+                'custbody_guest_names',
+                'custbody_due_date',
+                'custbody_booking_number',
+                search.createColumn({ name: 'altname', join: 'CUSTBODY_CUSTOMER_ACCOUNT' }),
+                search.createColumn({ name: 'custbody_provider_id' }),
+                search.createColumn({ name: 'name', join: 'CUSTBODY_TRANSACTION_RESERVATION_LINK' })
+            ]
+        });
 
         var allResults = [];
-        try {
-            var paged = searchRec.runPaged({ pageSize: 1000 });
-            log.audit('runSearchPaged total pages', paged.count + ' | pageSize=' + paged.pageSize);
-            var pageRanges = paged.pageRanges;
-            for (var p = 0; p < pageRanges.length; p++) {
-                var page = paged.fetch({ index: pageRanges[p].index });
-                log.audit('runSearchPaged processing page', 'index=' + pageRanges[p].index + ' | size=' + page.data.length);
-                var pageData = page.data;
-                for (var r = 0; r < pageData.length; r++) {
-                    allResults.push(pageData[r]);
-                    log.audit('runSearchPaged complete', 'total results=' + allResults.length);
-                }
+        var start = 0;
+        var pageSize = 1000;
+        var results;
 
-
+        do {
+            results = searchRec.run().getRange({ start: start, end: start + pageSize });
+            if (results && results.length > 0) {
+                allResults = allResults.concat(results);
+                start += results.length;
             }
-        } catch (err) {
-            // bubble up so caller can handle/reschedule
-            log.error('runSearchPaged error', err);
-            throw err;
-        }
-        return allResults;
+        } while (results && results.length === pageSize);
+
         log.audit('runSearchPaged complete', 'total results=' + allResults.length);
+        return allResults;
     }
 
     /************** createPDF (full pdf + excel creation) **************/
@@ -334,7 +344,6 @@ define([
 
             var today = getTimestamp();
 
-            // logo path
             var img;
             try {
                 img = (customerTemplate == brazilTemplate) ? file.load({ id: logoBrazil }) : file.load({ id: logoDefault });
@@ -352,7 +361,6 @@ define([
             strNamePic += "<img src=\"" + path + "\"></img>";
             strNamePic += "</td></tr></table>";
 
-            // header block
             var strName = "<table>";
             strName += "<tr><td></td><td>Customer:</td><td>" + xmlMod.escape({ xmlText: customerName }) + "</td></tr>";
             strName += "<tr><td></td><td>Address:</td><td>" + xmlMod.escape({ xmlText: customeraddress }) + "</td></tr>";
@@ -363,15 +371,13 @@ define([
             strName += "<tr><td></td><td>Statement Date:</td><td>" + statementDate + "</td></tr>";
             strName += "<tr><td></td><td>Amount Due:</td><td>" + currencySymbol + " " + netAmount + "</td></tr>";
             strName += "</table>";
-           // var strName2 = '<table width="100%" border="1" style="border-color: #808080; border-collapse:collapse;">';
-            // table header for content
+
             var strName2 = '<table width="100%" border="1" style="border-color: #808080; border-collapse:collapse;">';
             strName2 += '<thead>';
             strName2 += '<tr style="font-weight:bold; font-size:8px; background-color:Gray; color:#FFFFFF;">';
             strName2 += '<th>Hotel Name</th><th>Account #</th><th>Reservation #</th><th>Your Ref. #</th><th>Arrival</th><th>Departure</th><th>Guest(s) Name</th><th>Due Date</th><th>Reservation Value</th><th>Amount Due</th>';
             strName2 += '</tr></thead>';
 
-            // build excel xml
             var xmlString = '<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?>';
             xmlString += '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40">';
             xmlString += '<Worksheet ss:Name="Sheet1"><Table>';
@@ -387,7 +393,6 @@ define([
             xmlString += '<Row><Cell><Data ss:Type="String"> </Data></Cell></Row>';
             xmlString += '<Row><Cell><Data ss:Type="String">Hotel Name</Data></Cell><Cell><Data ss:Type="String">Account #</Data></Cell><Cell><Data ss:Type="String">Invoice #</Data></Cell><Cell><Data ss:Type="String">Reservation #</Data></Cell><Cell><Data ss:Type="String">Your Ref. #</Data></Cell><Cell><Data ss:Type="String">Arrival</Data></Cell><Cell><Data ss:Type="String">Departure</Data></Cell><Cell><Data ss:Type="String">Guest(s) Name</Data></Cell><Cell><Data ss:Type="String">Due Date</Data></Cell><Cell><Data ss:Type="String">Reservation Value</Data></Cell><Cell><Data ss:Type="String">Amount Due</Data></Cell></Row>';
 
-            // aging totals
             var agingCurrent = 0.00;
             var agingStage1 = 0.00;
             var agingStage2 = 0.00;
@@ -395,13 +400,11 @@ define([
             var agingStage4 = 0.00;
             var agingStage5 = 0.00;
 
-            // iterate results
             var resultsFinal = resultsAmount || [];
             log.audit('# of statement lines', 'resultsFinal=' + resultsFinal.length);
 
             for (var y = 0; resultsFinal != null && y < resultsFinal.length; y++) {
                 var resultsget = resultsFinal[y];
-                var columns = resultsget.columns;
 
                 var amount;
                 if (currency != 1) {
@@ -459,7 +462,6 @@ define([
                     else if (agingdays >= 90) { agingStage4 += getnumber(amountRem); }
                     agingStage5 += getnumber(amountRem);
 
-                    // append row to excel xml
                     xmlString += '<Row>';
                     xmlString += '<Cell><Data ss:Type="String">' + (provider || '') + '</Data></Cell>';
                     xmlString += '<Cell><Data ss:Type="String">' + (account || '') + '</Data></Cell>';
@@ -474,7 +476,6 @@ define([
                     xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(amountRem) + '</Data></Cell>';
                     xmlString += '</Row>';
 
-                    // append row to pdf html table
                     strName2 += "<tr>";
                     strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: provider }) + '</td>';
                     strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: account }) + '</td>';
@@ -488,9 +489,8 @@ define([
                     strName2 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(amountRem) + '</td>';
                     strName2 += "</tr><tr></tr>";
                 }
-            } // end results loop
+            }
 
-            // finish excel xml
             xmlString += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>';
             xmlString += '<Row><Cell><Data ss:Type="String">Aging</Data></Cell></Row>';
             xmlString += '<Row><Cell><Data ss:Type="String">Current</Data></Cell><Cell><Data ss:Type="String">1-30 Days</Data></Cell><Cell><Data ss:Type="String">31-60 Days</Data></Cell><Cell><Data ss:Type="String">61-90 Days</Data></Cell><Cell><Data ss:Type="String">Over 90 Days</Data></Cell><Cell><Data ss:Type="String">Total</Data></Cell></Row>';
@@ -502,7 +502,6 @@ define([
             xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(agingStage5.toFixed(2)) + '</Data></Cell></Row>';
             xmlString += '</Table></Worksheet></Workbook>';
 
-            // create Excel file
             var strXmlEncoded = encode.convert({ string: xmlString, inputEncoding: encode.Encoding.UTF_8, outputEncoding: encode.Encoding.BASE_64 });
             var objXlsFile = file.create({
                 name: (currency == 2 ? 'ExcelGBP_' : 'ExcelUSD_') + customerName + '_' + today + '.xls',
@@ -512,7 +511,6 @@ define([
             objXlsFile.folder = folderID;
             var excelFileId = objXlsFile.save();
 
-            // finish pdf html
             strName2 += '</table>';
             var strNameSpace = '<table><tr><td></td><td></td><td></td></tr></table>';
             var strName3 = '<table width="100%" border="1" style="border-color:#808080;border-collapse:collapse;"><tr style="font-weight:bold;background-color:Gray;color:#FFFFFF;"><th>Current</th><th>1-30 Days</th><th>31-60 Days</th><th>61-90 Days</th><th>Over 90 Days</th><th>Total</th></tr>';
@@ -544,7 +542,6 @@ define([
             pdfFile.name = 'PDF' + currencyCode + '_' + customerName + '_' + today + '.pdf';
             var pdfFileId = pdfFile.save();
 
-            // attach files to customer
             try {
                 record.attach({ record: { type: 'file', id: pdfFileId }, to: { type: 'customer', id: cname } });
                 record.attach({ record: { type: 'file', id: excelFileId }, to: { type: 'customer', id: cname } });

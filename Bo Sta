@@ -176,37 +176,68 @@ define([
     }
 
     /************** getTransactions (uses custom search, not saved search) **************/
+    // function getTransactions(cname, currency) {
+    //     var FILE_CONST = getFileConst();
+    //     var startdate = new Date(2016, 0, 1);
+    //     var enddate = new Date();
+    //     var middate = new Date((startdate.getTime() + enddate.getTime()) / 2);
+    //     var midDateStr = String(middate.getMonth() + 1) + "/" + String(middate.getDate()) + "/" + String(middate.getFullYear());
+
+    //     var custIdFilter = search.createFilter({ name: 'entity', operator: 'anyof', values: cname });
+    //     var dateFilterBefore = search.createFilter({ name: 'custbody_arrival_date', operator: 'before', values: midDateStr });
+    //     var dateFilterAfter = search.createFilter({ name: 'custbody_arrival_date', operator: 'onorafter', values: midDateStr });
+    //     var currencyFilter = search.createFilter({ name: 'currency', operator: 'anyof', values: currency });
+
+    //     var resultsAmount = [];
+
+    //     if (!isEmpty(FILE_CONST.ARRIVAL_DATE)) {
+    //         var dateFilterArrival = search.createFilter({ name: 'custbody_arrival_date', operator: 'onorafter', values: FILE_CONST.ARRIVAL_DATE });
+    //         var filtersArrival = [custIdFilter, dateFilterArrival, currencyFilter];
+    //         resultsAmount = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersArrival) || [];
+    //     } else {
+    //         var filtersOlder = [custIdFilter, dateFilterBefore, currencyFilter];
+    //         var filtersNewer = [custIdFilter, dateFilterAfter, currencyFilter];
+    //         var resultsOlder = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersOlder) || [];
+    //         log.audit('Results Older Count in gettrans', resultsOlder.length);
+    //         var resultsNewer = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersNewer) || [];
+    //         log.audit('Results Newer Count in the get tran', resultsNewer.length);
+    //         resultsAmount = resultsOlder.concat(resultsNewer);
+    //         log.audit('Total Results Count', resultsAmount.length);
+    //     }
+
+    //     return resultsAmount;
+    // }
+
     function getTransactions(cname, currency) {
         var FILE_CONST = getFileConst();
-        var startdate = new Date(2016, 0, 1);
-        var enddate = new Date();
-        var middate = new Date((startdate.getTime() + enddate.getTime()) / 2);
-        var midDateStr = String(middate.getMonth() + 1) + "/" + String(middate.getDate()) + "/" + String(middate.getFullYear());
 
-        var custIdFilter = search.createFilter({ name: 'entity', operator: 'anyof', values: cname });
-        var dateFilterBefore = search.createFilter({ name: 'custbody_arrival_date', operator: 'before', values: midDateStr });
-        var dateFilterAfter = search.createFilter({ name: 'custbody_arrival_date', operator: 'onorafter', values: midDateStr });
-        var currencyFilter = search.createFilter({ name: 'currency', operator: 'anyof', values: currency });
+        var filters = [
+            search.createFilter({
+                name: 'entity',
+                operator: 'anyof',
+                values: cname
+            }),
+            search.createFilter({
+                name: 'currency',
+                operator: 'anyof',
+                values: currency
+            })
+        ];
 
-        var resultsAmount = [];
-
+        // optional “arrival on/after” parameter – if set, it narrows the range
         if (!isEmpty(FILE_CONST.ARRIVAL_DATE)) {
-            var dateFilterArrival = search.createFilter({ name: 'custbody_arrival_date', operator: 'onorafter', values: FILE_CONST.ARRIVAL_DATE });
-            var filtersArrival = [custIdFilter, dateFilterArrival, currencyFilter];
-            resultsAmount = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersArrival) || [];
-        } else {
-            var filtersOlder = [custIdFilter, dateFilterBefore, currencyFilter];
-            var filtersNewer = [custIdFilter, dateFilterAfter, currencyFilter];
-            var resultsOlder = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersOlder) || [];
-            log.audit('Results Older Count in gettrans', resultsOlder.length);
-            var resultsNewer = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filtersNewer) || [];
-            log.audit('Results Newer Count in the get tran', resultsNewer.length);
-            resultsAmount = resultsOlder.concat(resultsNewer);
-            log.audit('Total Results Count', resultsAmount.length);
+            filters.push(search.createFilter({
+                name: 'custbody_arrival_date',
+                operator: 'onorafter',
+                values: FILE_CONST.ARRIVAL_DATE
+            }));
         }
 
+        var resultsAmount = runSearchPaged('transaction', FILE_CONST.SEARCH_TRANSACTIONS, filters) || [];
+        log.audit('getTransactions', 'cust=' + cname + ' curr=' + currency + ' total results=' + resultsAmount.length);
         return resultsAmount;
     }
+
 
     /************** getBalance **************/
     function getBalance(cname, resultsAmount, currency) {
@@ -269,61 +300,42 @@ define([
 
     /************** runSearchPaged - NEW: simple search.create instead of saved search **************/
     function runSearchPaged(recType, searchId, filters) {
-        // We IGNORE searchId here on purpose to avoid the heavy saved search
-        // and create a light-weight transaction search with only the columns we really need.
+        if (!recType && !searchId) return [];
 
-        var recTypeFinal = recType || 'transaction';
-        var filtersFinal = filters ? filters.slice(0) : [];
-
-        // Force mainline = F to work at line level (avoids duplicates on summary/main lines)
-        filtersFinal.push(search.createFilter({
-            name: 'mainline',
-            operator: 'is',
-            values: 'F'
-        }));
-
-        var searchRec = search.create({
-            type: recTypeFinal,
-            filters: filtersFinal,
-            columns: [
-                'internalid',
-                'type',
-                'tranid',
-                'amount',
-                'fxamount',
-                'amountremaining',
-                'fxamountremaining',
-                'duedate',
-                'currency',
-                'custbody_arrival_date',
-                'custbody_departure_date',
-                'custbody_total_earmarks',
-                'custbody_tour_operator_order_number',
-                'custbody_guest_names',
-                'custbody_due_date',
-                'custbody_booking_number',
-                search.createColumn({ name: 'altname', join: 'CUSTBODY_CUSTOMER_ACCOUNT' }),
-                search.createColumn({ name: 'custbody_provider_id' }),
-                search.createColumn({ name: 'name', join: 'CUSTBODY_TRANSACTION_RESERVATION_LINK' })
-            ]
-        });
+        var searchRec;
+        if (searchId) {
+            searchRec = search.load({ id: searchId });
+            if (filters && filters.length) {
+                for (var f = 0; f < filters.length; f++) {
+                    searchRec.filters.push(filters[f]);
+                }
+            }
+        } else {
+            searchRec = search.create({ type: recType, filters: filters });
+        }
 
         var allResults = [];
-        var start = 0;
-        var pageSize = 1000;
-        var results;
+        try {
+            var paged = searchRec.runPaged({ pageSize: 1000 });
+            var pageRanges = paged.pageRanges;
 
-        do {
-            results = searchRec.run().getRange({ start: start, end: start + pageSize });
-            if (results && results.length > 0) {
-                allResults = allResults.concat(results);
-                start += results.length;
+            for (var p = 0; p < pageRanges.length; p++) {
+                var page = paged.fetch({ index: pageRanges[p].index });
+                var pageData = page.data;
+
+                for (var r = 0; r < pageData.length; r++) {
+                    allResults.push(pageData[r]);
+                }
             }
-        } while (results && results.length === pageSize);
 
-        log.audit('runSearchPaged complete', 'total results=' + allResults.length);
+            log.audit('runSearchPaged', 'searchId=' + (searchId || '') + ' total results=' + allResults.length);
+        } catch (err) {
+            log.error('runSearchPaged error', err);
+            throw err;
+        }
         return allResults;
     }
+
 
     /************** createPDF (full pdf + excel creation) **************/
     function createPDF(cusObj, netAmount, resultsAmount, statementDate, currency) {

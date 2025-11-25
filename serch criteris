@@ -1,0 +1,71 @@
+var transactionSearchObj = search.create({
+   type: "transaction",
+   settings:[{"name":"consolidationtype","value":"ACCTTYPE"},{"name":"includeperiodendtransactions","value":"F"}],
+   filters:
+   [
+      ["customermain.internalidnumber","equalto","229750"], 
+      "AND", 
+      ["subsidiary","anyof","33"], 
+      "AND", 
+      [[[["type","anyof","SalesOrd"],"AND",[["custbody_arrival_date","notafter","daysfromnow45"],"OR",["custbody_due_date","notafter","daysfromnow45"]],"AND",["applyingtransaction.appliedtolinktype","noneof","OrdDep"],"AND",["customer.custentity_payment_type","anyof","2"],"AND",["custbody_due_date","isnotempty",""],"AND",["custbody_net_avail_to_earmark","notequalto","0.00"],"AND",["status","anyof","SalesOrd:B","SalesOrd:D","SalesOrd:E","SalesOrd:F"]]],"OR",[[["type","anyof","CustInvc"],"AND",[["duedate","notafter","daysfromnow45"],"OR",["custbody_arrival_date","notafter","daysfromnow45"]],"AND",["applyingtransaction.appliedtolinktype","noneof","DepAppl"],"AND",["customer.custentity_payment_type","anyof","2"],"AND",["status","anyof","CustInvc:A"]]],"OR",[[["customer.custentity_payment_type","anyof","1"],"AND",["status","anyof","CustInvc:A"],"AND",["type","anyof","CustInvc"]]]], 
+      "AND", 
+      ["mainline","is","T"], 
+      "AND", 
+      ["customer.custentity_upaya_last_statement_date","noton","today"], 
+      "AND", 
+      ["customer.custentity_2663_email_address_notif","isnotempty",""]
+   ],
+   columns:
+   [
+      search.createColumn({name: "internalid", label: "Internal ID"}),
+      search.createColumn({name: "entity", label: "Name"}),
+      search.createColumn({name: "amount", label: "Booking Value"}),
+      search.createColumn({name: "custbody_total_earmarks", label: "Total Earmarks"}),
+      search.createColumn({name: "type", label: "Type"}),
+      search.createColumn({
+         name: "custentity_payment_type",
+         join: "customer",
+         label: "Payment Type"
+      }),
+      search.createColumn({name: "custbody_booking_number", label: "Booking Number"}),
+      search.createColumn({name: "custbody_booking_status", label: "Booking Status"}),
+      search.createColumn({name: "custbody_guest_names", label: "Guest Names"}),
+      search.createColumn({name: "custbody_arrival_date", label: "Arrival Date"}),
+      search.createColumn({name: "custbody_arrival_date", label: "Arrival Date"}),
+      search.createColumn({name: "custbody_departure_date", label: "Departure Date"}),
+      search.createColumn({name: "custbody_tour_operator_order_number", label: "Tour Operator Order Number"}),
+      search.createColumn({
+         name: "custentity_2663_email_address_notif",
+         join: "customer",
+         label: "Email Address for Payment Notification"
+      }),
+      search.createColumn({name: "custbody_due_date", label: "Prepay Due Date"}),
+      search.createColumn({name: "custbody_provider_id", label: "Supplier"}),
+      search.createColumn({name: "duedate", label: "Due Date/Receive By"}),
+      search.createColumn({name: "amountremaining", label: "Amount Due (Invoice)"}),
+      search.createColumn({
+         name: "altname",
+         join: "CUSTBODY_CUSTOMER_ACCOUNT",
+         label: "Name"
+      }),
+      search.createColumn({
+         name: "name",
+         join: "CUSTBODY_TRANSACTION_RESERVATION_LINK",
+         label: "Name"
+      }),
+      search.createColumn({name: "tranid", label: "Document Number"}),
+      search.createColumn({name: "fxamountremaining", label: "Amount Remaining (Foreign Currency)"})
+   ]
+});
+var searchResultCount = transactionSearchObj.runPaged().count;
+log.debug("transactionSearchObj result count",searchResultCount);
+transactionSearchObj.run().each(function(result){
+   // .run().each has a limit of 4,000 results
+   return true;
+});
+
+/*
+transactionSearchObj.id="customsearch1764054488287";
+transactionSearchObj.title="Bonotel Statements Adhoc calc - Earmarks (Used in Script do not Delete/Modify) (copy)";
+var newSearchId = transactionSearchObj.save();
+*/

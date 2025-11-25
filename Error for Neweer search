@@ -1,0 +1,27 @@
+{
+    "type": "error.SuiteScriptError",
+    "name": "ABORT_SEARCH_EXCEEDED_MAX_TIME",
+    "message": "This search has timed out. You can choose to schedule it to run in the background and have the results emailed to you when complete. On the saved search form, click the \"Email\" tab, check \"Send According to Schedule\", choose an email address on the \"Specific Recipients\" subtab and a recurrence pattern on the \"Schedule\" subtab.",
+    "id": "",
+    "stack": [
+        "createError(N/error)",
+        "runSearchPaged(/SuiteScripts/BPC_MR_Statements.js:297)",
+        "getTransactions(/SuiteScripts/BPC_MR_Statements.js:210)",
+        "reduce(/SuiteScripts/BPC_MR_Statements.js:104)"
+    ],
+    "cause": {
+        "type": "internal error",
+        "code": "ABORT_SEARCH_EXCEEDED_MAX_TIME",
+        "details": "This search has timed out. You can choose to schedule it to run in the background and have the results emailed to you when complete. On the saved search form, click the \"Email\" tab, check \"Send According to Schedule\", choose an email address on the \"Specific Recipients\" subtab and a recurrence pattern on the \"Schedule\" subtab.",
+        "userEvent": null,
+        "stackTrace": [
+            "createError(N/error)",
+            "runSearchPaged(/SuiteScripts/BPC_MR_Statements.js:297)",
+            "getTransactions(/SuiteScripts/BPC_MR_Statements.js:210)",
+            "reduce(/SuiteScripts/BPC_MR_Statements.js:104)"
+        ],
+        "notifyOff": false
+    },
+    "notifyOff": false,
+    "userFacing": false
+}

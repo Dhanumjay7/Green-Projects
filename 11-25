@@ -178,6 +178,10 @@ define([
     /************** getTransactions **************/
     function getTransactions(cname, currency) {
         var FILE_CONST = getFileConst();
+
+                
+        
+    
         var common = [
             ['customermain.internalidnumber', 'equalto', String(cname)],
             'AND', ['subsidiary', 'anyof', '33'],
@@ -361,6 +365,9 @@ define([
 
             var today = getTimestamp();
 
+            // --------------------------------------------------------------------
+            // Logo
+            // --------------------------------------------------------------------
             var img;
             try {
                 img = (customerTemplate == brazilTemplate) ? file.load({ id: logoBrazil }) : file.load({ id: logoDefault });
@@ -378,6 +385,9 @@ define([
             strNamePic += "<img src=\"" + path + "\"></img>";
             strNamePic += "</td></tr></table>";
 
+            // --------------------------------------------------------------------
+            // Header / customer block
+            // --------------------------------------------------------------------
             var strName = "<table>";
             strName += "<tr><td></td><td>Customer:</td><td>" + xmlMod.escape({ xmlText: customerName }) + "</td></tr>";
             strName += "<tr><td></td><td>Address:</td><td>" + xmlMod.escape({ xmlText: customeraddress }) + "</td></tr>";
@@ -389,12 +399,31 @@ define([
             strName += "<tr><td></td><td>Amount Due:</td><td>" + currencySymbol + " " + netAmount + "</td></tr>";
             strName += "</table>";
 
-            var strName2 = '<table width="100%" border="1" style="border-color: #808080; border-collapse:collapse;">';
+            // --------------------------------------------------------------------
+            // DETAIL TABLE (with borders)
+            // --------------------------------------------------------------------
+            var tableBorderStyle = "border:0.5pt solid #808080; border-collapse:collapse;";
+            var headerCellStyle = "border:0.5pt solid #808080; padding-left:5px;";
+            var bodyCellStyle = "border:0.5pt solid #808080; padding-left:5px;";
+
+            var strName2 = '<table width="100%" style="' + tableBorderStyle + '">';
             strName2 += '<thead>';
             strName2 += '<tr style="font-weight:bold; font-size:8px; background-color:Gray; color:#FFFFFF;">';
-            strName2 += '<th>Hotel Name</th><th>Account #</th><th>Reservation #</th><th>Your Ref. #</th><th>Arrival</th><th>Departure</th><th>Guest(s) Name</th><th>Due Date</th><th>Reservation Value</th><th>Amount Due</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Hotel Name</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Account #</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Reservation #</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Your Ref. #</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Arrival</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Departure</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Guest(s) Name</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Due Date</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Reservation Value</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Amount Due</th>';
             strName2 += '</tr></thead>';
 
+            // --------------------------------------------------------------------
+            // Excel XML header (unchanged)
+            // --------------------------------------------------------------------
             var xmlString = '<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?>';
             xmlString += '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40">';
             xmlString += '<Worksheet ss:Name="Sheet1"><Table>';
@@ -430,7 +459,8 @@ define([
                     amount = resultsget.getValue('amount') || resultsget.getValue('fxamount') || 0;
                 }
 
-                var booknum = resultsget.getValue({ name: 'name', join: 'CUSTBODY_TRANSACTION_RESERVATION_LINK' }) || resultsget.getValue({ name: 'custbody_booking_number' });
+                var booknum = resultsget.getValue({ name: 'name', join: 'CUSTBODY_TRANSACTION_RESERVATION_LINK' }) ||
+                    resultsget.getValue({ name: 'custbody_booking_number' });
                 var guest = resultsget.getValue({ name: "custbody_guest_names" }) || '';
                 var arrival = resultsget.getValue({ name: "custbody_arrival_date" }) || '';
                 var departure = resultsget.getValue({ name: "custbody_departure_date" }) || '';
@@ -459,7 +489,8 @@ define([
                     dueDate = resultsget.getValue({ name: "custbody_due_date" }) || '';
                     amountRem = getnumber(amount) - getnumber(depositamount);
                 } else {
-                    dueDate = resultsget.getValue({ name: "custbody_due_date" }) || resultsget.getValue({ name: "duedate" }) || '';
+                    dueDate = resultsget.getValue({ name: "custbody_due_date" }) ||
+                        resultsget.getValue({ name: "duedate" }) || '';
                     if (currency != 1) {
                         amountRem = getnumber(resultsget.getValue({ name: "fxamountremaining" })) || 0;
                     } else {
@@ -472,13 +503,14 @@ define([
                 if (amountRem > 0) {
                     var agingdays = 0;
                     if (dueDate) agingdays = days_between(statementDate, dueDate);
-                    if (agingdays == 0 || agingdays < 0) { agingCurrent += getnumber(amountRem); }
-                    else if (agingdays <= 30 && agingdays >= 1) { agingStage1 += getnumber(amountRem); }
-                    else if (agingdays <= 60 && agingdays >= 31) { agingStage2 += getnumber(amountRem); }
-                    else if (agingdays <= 90 && agingdays >= 61) { agingStage3 += getnumber(amountRem); }
-                    else if (agingdays >= 90) { agingStage4 += getnumber(amountRem); }
+                    if (agingdays <= 0) { agingCurrent += getnumber(amountRem); }
+                    else if (agingdays <= 30) { agingStage1 += getnumber(amountRem); }
+                    else if (agingdays <= 60) { agingStage2 += getnumber(amountRem); }
+                    else if (agingdays <= 90) { agingStage3 += getnumber(amountRem); }
+                    else { agingStage4 += getnumber(amountRem); }
                     agingStage5 += getnumber(amountRem);
 
+                    // Excel row
                     xmlString += '<Row>';
                     xmlString += '<Cell><Data ss:Type="String">' + (provider || '') + '</Data></Cell>';
                     xmlString += '<Cell><Data ss:Type="String">' + (account || '') + '</Data></Cell>';
@@ -493,21 +525,23 @@ define([
                     xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(amountRem) + '</Data></Cell>';
                     xmlString += '</Row>';
 
+                    // PDF row with **borders**
                     strName2 += "<tr>";
-                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: provider }) + '</td>';
-                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: account }) + '</td>';
-                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: booknum }) + '</td>';
-                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: refNo }) + '</td>';
-                    strName2 += '<td>' + (arrival || '') + '</td>';
-                    strName2 += '<td>' + (departure || '') + '</td>';
-                    strName2 += '<td>' + xmlMod.escape({ xmlText: guest }) + '</td>';
-                    strName2 += '<td>' + (dueDate || '') + '</td>';
-                    strName2 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(amount) + '</td>';
-                    strName2 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(amountRem) + '</td>';
-                    strName2 += "</tr><tr></tr>";
+                    strName2 += '<td style="' + bodyCellStyle + '">' + xmlMod.escape({ xmlText: provider }) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + xmlMod.escape({ xmlText: account }) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + xmlMod.escape({ xmlText: booknum }) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + xmlMod.escape({ xmlText: refNo }) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + (arrival || '') + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + (departure || '') + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + xmlMod.escape({ xmlText: guest }) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + (dueDate || '') + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(amount) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(amountRem) + '</td>';
+                    strName2 += "</tr>";
                 }
             }
 
+            // finish Excel aging
             xmlString += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>';
             xmlString += '<Row><Cell><Data ss:Type="String">Aging</Data></Cell></Row>';
             xmlString += '<Row><Cell><Data ss:Type="String">Current</Data></Cell><Cell><Data ss:Type="String">1-30 Days</Data></Cell><Cell><Data ss:Type="String">31-60 Days</Data></Cell><Cell><Data ss:Type="String">61-90 Days</Data></Cell><Cell><Data ss:Type="String">Over 90 Days</Data></Cell><Cell><Data ss:Type="String">Total</Data></Cell></Row>';
@@ -519,6 +553,7 @@ define([
             xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(agingStage5.toFixed(2)) + '</Data></Cell></Row>';
             xmlString += '</Table></Worksheet></Workbook>';
 
+            // create Excel file
             var strXmlEncoded = encode.convert({ string: xmlString, inputEncoding: encode.Encoding.UTF_8, outputEncoding: encode.Encoding.BASE_64 });
             var objXlsFile = file.create({
                 name: (currency == 2 ? 'ExcelGBP_' : 'ExcelUSD_') + customerName + '_' + today + '.xls',
@@ -528,16 +563,28 @@ define([
             objXlsFile.folder = folderID;
             var excelFileId = objXlsFile.save();
 
+            // --------------------------------------------------------------------
+            // Aging table for PDF (with borders)
+            // --------------------------------------------------------------------
             strName2 += '</table>';
             var strNameSpace = '<table><tr><td></td><td></td><td></td></tr></table>';
-            var strName3 = '<table width="100%" border="1" style="border-color:#808080;border-collapse:collapse;"><tr style="font-weight:bold;background-color:Gray;color:#FFFFFF;"><th>Current</th><th>1-30 Days</th><th>31-60 Days</th><th>61-90 Days</th><th>Over 90 Days</th><th>Total</th></tr>';
+
+            var strName3 = '<table width="100%" style="' + tableBorderStyle + '">';
+            strName3 += '<tr style="font-weight:bold; background-color:Gray; color:#FFFFFF;">';
+            strName3 += '<th style="' + headerCellStyle + '">Current</th>';
+            strName3 += '<th style="' + headerCellStyle + '">1-30 Days</th>';
+            strName3 += '<th style="' + headerCellStyle + '">31-60 Days</th>';
+            strName3 += '<th style="' + headerCellStyle + '">61-90 Days</th>';
+            strName3 += '<th style="' + headerCellStyle + '">Over 90 Days</th>';
+            strName3 += '<th style="' + headerCellStyle + '">Total</th>';
+            strName3 += '</tr>';
             strName3 += '<tr>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingCurrent.toFixed(2)) + '</td>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage1.toFixed(2)) + '</td>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage2.toFixed(2)) + '</td>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage3.toFixed(2)) + '</td>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage4.toFixed(2)) + '</td>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage5.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingCurrent.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage1.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage2.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage3.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage4.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage5.toFixed(2)) + '</td>';
             strName3 += '</tr></table>';
 
             var payLinkURL = getPayLinkURL(cname);
@@ -566,8 +613,7 @@ define([
                 log.audit('attach error', attErr);
             }
 
-            var createdFiles = { pdf: pdfFileId, excel: excelFileId };
-            return createdFiles;
+            return { pdf: pdfFileId, excel: excelFileId };
 
         } catch (err) {
             log.error('createPDF error', err);

@@ -1,19 +1,165 @@
-   var startdate = new Date(2016, 00, 01); 
-            var enddate = new Date();
-            var middate = new Date((startdate.getTime() + enddate.getTime()) / 2);
-            // log.debug("start date, middate, enddate", startdate + " | " + middate + " | " + enddate);
-            var midDateStr = String(middate.getMonth() + 1) + "/" + String(middate.getDate()) + "/" + String(middate.getFullYear());
-            //log.debug("middate str", midDateStr);
+function getTransactions(cname, currency) {
+    var FILE_CONST = getFileConst();
 
-                 
-       
-            var dateFilterBefore = search.createFilter({
-                name: 'custbody_arrival_date',
-                operator: 'before',
-                values: midDateStr
-            });
-            var dateFilterAfter = search.createFilter({
-                name: 'custbody_arrival_date',
-                operator: 'onorafter',
-                values: midDateStr
-            });
+    // --- mid-date split (2016-01-01 to today) ---
+    var startdate = new Date(2016, 0, 1);  // month is 0-based
+    var enddate   = new Date();
+    var middate   = new Date((startdate.getTime() + enddate.getTime()) / 2);
+    var midDateStr = String(middate.getMonth() + 1) + "/" +
+                     String(middate.getDate()) + "/" +
+                     String(middate.getFullYear());
+
+    // base filters common to all searches
+    var commonBase = [
+        ['customermain.internalidnumber', 'equalto', String(cname)],
+        'AND', ['subsidiary', 'anyof', '33'],
+        'AND', ['mainline', 'is', 'T'],
+        'AND', ['customer.custentity_upaya_last_statement_date', 'noton', 'today'],
+        'AND', ['customer.custentity_2663_email_address_notif', 'isnotempty', ''],
+        'AND', ['currency', 'anyof', String(currency)]
+    ];
+
+    var resultsAmount = [];
+
+    // ----------------------------------------------------------------------
+    // 1) If ARRIVAL_DATE parameter is given, just use that (no mid-date split)
+    // ----------------------------------------------------------------------
+    if (!isEmpty(FILE_CONST.ARRIVAL_DATE)) {
+
+        var common = commonBase.concat([
+            'AND', ['custbody_arrival_date', 'onorafter', FILE_CONST.ARRIVAL_DATE]
+        ]);
+
+        // SO – payment type = 2
+        var filtersSO = common.concat([
+            'AND', ['type', 'anyof', 'SalesOrd'],
+            'AND', [
+                ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
+                'OR',
+                ['custbody_due_date', 'notafter', 'daysfromnow45']
+            ],
+            'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+            'AND', ['custbody_due_date', 'isnotempty', ''],
+            'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
+            'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
+        ]);
+
+        // INVOICE – payment type = 2
+        var filtersInvPT2 = common.concat([
+            'AND', ['type', 'anyof', 'CustInvc'],
+            'AND', [
+                ['duedate', 'notafter', 'daysfromnow45'],
+                'OR',
+                ['custbody_arrival_date', 'notafter', 'daysfromnow45']
+            ],
+            'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+            'AND', ['status', 'anyof', 'CustInvc:A']
+        ]);
+
+        // INVOICE – payment type = 1
+        var filtersInvPT1 = common.concat([
+            'AND', ['type', 'anyof', 'CustInvc'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '1'],
+            'AND', ['status', 'anyof', 'CustInvc:A']
+        ]);
+
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO));
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2));
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1));
+
+    } else {
+        // ------------------------------------------------------------------
+        // 2) No ARRIVAL_DATE param: split into BEFORE midDate and ON/AFTER
+        // ------------------------------------------------------------------
+
+        var commonBefore = commonBase.concat([
+            'AND', ['custbody_arrival_date', 'before', midDateStr]
+        ]);
+        var commonAfter = commonBase.concat([
+            'AND', ['custbody_arrival_date', 'onorafter', midDateStr]
+        ]);
+
+        // ---------- BEFORE midDate ----------
+
+        var filtersSO_Before = commonBefore.concat([
+            'AND', ['type', 'anyof', 'SalesOrd'],
+            'AND', [
+                ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
+                'OR',
+                ['custbody_due_date', 'notafter', 'daysfromnow45']
+            ],
+            'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+            'AND', ['custbody_due_date', 'isnotempty', ''],
+            'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
+            'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
+        ]);
+
+        var filtersInvPT2_Before = commonBefore.concat([
+            'AND', ['type', 'anyof', 'CustInvc'],
+            'AND', [
+                ['duedate', 'notafter', 'daysfromnow45'],
+                'OR',
+                ['custbody_arrival_date', 'notafter', 'daysfromnow45']
+            ],
+            'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+            'AND', ['status', 'anyof', 'CustInvc:A']
+        ]);
+
+        var filtersInvPT1_Before = commonBefore.concat([
+            'AND', ['type', 'anyof', 'CustInvc'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '1'],
+            'AND', ['status', 'anyof', 'CustInvc:A']
+        ]);
+
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO_Before));
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2_Before));
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1_Before));
+
+        // ---------- ON/AFTER midDate ----------
+
+        var filtersSO_After = commonAfter.concat([
+            'AND', ['type', 'anyof', 'SalesOrd'],
+            'AND', [
+                ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
+                'OR',
+                ['custbody_due_date', 'notafter', 'daysfromnow45']
+            ],
+            'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+            'AND', ['custbody_due_date', 'isnotempty', ''],
+            'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
+            'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
+        ]);
+
+        var filtersInvPT2_After = commonAfter.concat([
+            'AND', ['type', 'anyof', 'CustInvc'],
+            'AND', [
+                ['duedate', 'notafter', 'daysfromnow45'],
+                'OR',
+                ['custbody_arrival_date', 'notafter', 'daysfromnow45']
+            ],
+            'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+            'AND', ['status', 'anyof', 'CustInvc:A']
+        ]);
+
+        var filtersInvPT1_After = commonAfter.concat([
+            'AND', ['type', 'anyof', 'CustInvc'],
+            'AND', ['customer.custentity_payment_type', 'anyof', '1'],
+            'AND', ['status', 'anyof', 'CustInvc:A']
+        ]);
+
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO_After));
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2_After));
+        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1_After));
+    }
+
+    log.audit('getTransactions', 'customer=' + cname + ' currency=' + currency +
+        ' | total=' + resultsAmount.length);
+
+    return resultsAmount;
+}

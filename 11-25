@@ -39,11 +39,11 @@ define([
     function getFileConst() {
         return {
             SEARCH_INPUT: getScriptParam('custscript_weeklyst_searchinput'),
-            SEARCH_TRANSACTIONS: getScriptParam('custscript_weeklyst_searchtransactions'),
+        
             // NEW: three separate transaction saved searches
-            SEARCH_SO_PT2: getScriptParam('custscript_ss_so_pt2'),
-            SEARCH_INV_PT2: getScriptParam('custscript_ss_inv_pt2'),
-            SEARCH_INV_PT1: getScriptParam('custscript_ss_inv_pt1'),
+            SEARCH_SO_PT2: getScriptParam('custscript_weeklyst_searchtransactions'),
+            SEARCH_INV_PT2: getScriptParam('custscript_search_inv_pt2_'),
+            SEARCH_INV_PT1: getScriptParam('custscript_search_inv_pt1_'),
 
             ARRIVAL_DATE: getScriptParam('custscript_weeklyst_searcharrivaldate') || '',
 
@@ -193,6 +193,8 @@ define([
     //get transactions
     function getTransactions(cname, currency) {
         var FILE_CONST = getFileConst();
+        log.audit('getTransactions START', 'cname=' + cname + ' | currency=' + currency);
+        log.audit('Using FILE_CONST', JSON.stringify(FILE_CONST));
         var resultsAmount = [];
 
         if (!FILE_CONST.SEARCH_SO_PT2 || !FILE_CONST.SEARCH_INV_PT2 || !FILE_CONST.SEARCH_INV_PT1) {

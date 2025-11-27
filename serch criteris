@@ -1,2 +1,27 @@
-Error	getTransactions	11/27/2025	4:18 am	-System-	One or more transaction search IDs are missing in script parameters
-Audit	Using FILE_CONST	11/27/2025	4:18 am	-System-	{"SEARCH_INPUT":"4436","SEARCH_SO_PT2":"4441","SEARCH_INV_PT2":null,"SEARCH_INV_PT1":null,"ARRIVAL_DATE":""}
+{
+    "type": "error.SuiteScriptError",
+    "name": "SSS_INVALID_SRCH_FILTER",
+    "message": "An nlobjSearchFilter contains invalid search criteria: customermain.internalidnumber.",
+    "id": "",
+    "stack": [
+        "create(N/searchPaging)",
+        "runSavedTransactionSearch(/SuiteScripts/BPC_MR_Statements.js:363)",
+        "getTransactions(/SuiteScripts/BPC_MR_Statements.js:269)",
+        "reduce(/SuiteScripts/BPC_MR_Statements.js:113)"
+    ],
+    "cause": {
+        "type": "internal error",
+        "code": "SSS_INVALID_SRCH_FILTER",
+        "details": "An nlobjSearchFilter contains invalid search criteria: customermain.internalidnumber.",
+        "userEvent": null,
+        "stackTrace": [
+            "create(N/searchPaging)",
+            "runSavedTransactionSearch(/SuiteScripts/BPC_MR_Statements.js:363)",
+            "getTransactions(/SuiteScripts/BPC_MR_Statements.js:269)",
+            "reduce(/SuiteScripts/BPC_MR_Statements.js:113)"
+        ],
+        "notifyOff": false
+    },
+    "notifyOff": false,
+    "userFacing": false
+}

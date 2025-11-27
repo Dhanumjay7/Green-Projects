@@ -1,27 +1,30 @@
-{
-    "type": "error.SuiteScriptError",
-    "name": "SSS_INVALID_SRCH_FILTER",
-    "message": "An nlobjSearchFilter contains invalid search criteria: customermain.internalidnumber.",
-    "id": "",
-    "stack": [
-        "create(N/searchPaging)",
-        "runSavedTransactionSearch(/SuiteScripts/BPC_MR_Statements.js:363)",
-        "getTransactions(/SuiteScripts/BPC_MR_Statements.js:269)",
-        "reduce(/SuiteScripts/BPC_MR_Statements.js:113)"
-    ],
-    "cause": {
-        "type": "internal error",
-        "code": "SSS_INVALID_SRCH_FILTER",
-        "details": "An nlobjSearchFilter contains invalid search criteria: customermain.internalidnumber.",
-        "userEvent": null,
-        "stackTrace": [
-            "create(N/searchPaging)",
-            "runSavedTransactionSearch(/SuiteScripts/BPC_MR_Statements.js:363)",
-            "getTransactions(/SuiteScripts/BPC_MR_Statements.js:269)",
-            "reduce(/SuiteScripts/BPC_MR_Statements.js:113)"
-        ],
-        "notifyOff": false
-    },
-    "notifyOff": false,
-    "userFacing": false
-}
+var baseFilters = [
+    // filter by customer
+    search.createFilter({
+        name: 'entity',                      // transaction's entity (customer)
+        operator: search.Operator.ANYOF,
+        values: String(cname)
+    }),
+
+    // filter by currency
+    search.createFilter({
+        name: 'currency',
+        operator: search.Operator.ANYOF,
+        values: String(currency)
+    }),
+
+    // customer last statement date (joined to customer)
+    search.createFilter({
+        name: 'custentity_upaya_last_statement_date',
+        join: 'customer',                    // <-- join, not in the name
+        operator: search.Operator.NOTON,
+        values: 'today'
+    }),
+
+    // customer email notif (joined to customer)
+    search.createFilter({
+        name: 'custentity_2663_email_address_notif',
+        join: 'customer',
+        operator: search.Operator.ISNOTEMPTY
+    })
+];

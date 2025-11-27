@@ -27,14 +27,29 @@ define([
         }
     }
 
+    // function getFileConst() {
+    //     return {
+    //         SEARCH_INPUT: getScriptParam('custscript_weeklyst_searchinput'),
+    //         SEARCH_TRANSACTIONS: getScriptParam('custscript_weeklyst_searchtransactions'), // now unused, but kept for compatibility
+    //         ARRIVAL_DATE: getScriptParam('custscript_weeklyst_searcharrivaldate') || '',
+
+    //     };
+    // }
+
     function getFileConst() {
         return {
             SEARCH_INPUT: getScriptParam('custscript_weeklyst_searchinput'),
-            SEARCH_TRANSACTIONS: getScriptParam('custscript_weeklyst_searchtransactions'), // now unused, but kept for compatibility
+
+            // NEW: three separate transaction saved searches
+            SEARCH_SO_PT2: getScriptParam('custscript_weeklyst_searchtransactions'),
+            SEARCH_INV_PT2: getScriptParam('custscript_search_inv_pt2_'),
+            SEARCH_INV_PT1: getScriptParam('custscript_search_inv_pt1_'),
+
             ARRIVAL_DATE: getScriptParam('custscript_weeklyst_searcharrivaldate') || '',
-            RESUME_FROM_CUSTOMER: getScriptParam('custscript_resume_from_customer') || ''
+
         };
     }
+
 
     /************** Entry point: getInputData **************/
     function getInputData() {
@@ -125,7 +140,7 @@ define([
         }
     }
 
-  
+
     function summarize(summary) {
         log.audit('Summary complete', JSON.stringify(summary));
         if (summary.inputSummary.error)
@@ -139,6 +154,7 @@ define([
 
     //build customer object
     function buildCustomerObject(customerRecord, custId) {
+
         var obj = {};
         obj.cname = custId;
         obj.customerName = customerRecord.getValue('isperson') ? customerRecord.getValue('altname') : customerRecord.getValue('companyname');
@@ -177,157 +193,115 @@ define([
     //get transactions
     function getTransactions(cname, currency) {
         var FILE_CONST = getFileConst();
+        log.audit('getTransactions START', 'cname=' + cname + ' | currency=' + currency);
+        log.audit('Using FILE_CONST', JSON.stringify(FILE_CONST));
+        var resultsAmount = [];
 
+        if (!FILE_CONST.SEARCH_SO_PT2 || !FILE_CONST.SEARCH_INV_PT2 || !FILE_CONST.SEARCH_INV_PT1) {
+            log.error('getTransactions', 'One or more transaction search IDs are missing in script parameters.');
+            return [];
+        }
 
+        // We still use the mid-date split like your original code
         var startdate = new Date(2016, 0, 1);
         var enddate = new Date();
         var middate = new Date((startdate.getTime() + enddate.getTime()) / 2);
-        var midDateStr = String(middate.getMonth() + 1) + "/" +
-            String(middate.getDate()) + "/" +
-            String(middate.getFullYear());
+        var midDateStr = (middate.getMonth() + 1) + '/' +
+            middate.getDate() + '/' +
+            middate.getFullYear();
 
-        // common filters
-        var commonBase = [
-            ['customermain.internalidnumber', 'equalto', String(cname)],
-            'AND', ['subsidiary', 'anyof', '33'],
-            'AND', ['mainline', 'is', 'T'],
-            'AND', ['customer.custentity_upaya_last_statement_date', 'noton', 'today'],
-            'AND', ['customer.custentity_2663_email_address_notif', 'isnotempty', ''],
-            'AND', ['currency', 'anyof', String(currency)]
+        // filters that must always be applied on top of the saved searches
+
+        //  var baseFilters = [
+        //     ['customermain.internalidnumber', 'equalto', String(cname)],
+        //     'AND', ['subsidiary', 'anyof', '33'],
+        //     'AND', ['mainline', 'is', 'T'],
+        //     'AND', ['customer.custentity_upaya_last_statement_date', 'noton', 'today'],
+        //     'AND', ['customer.custentity_2663_email_address_notif', 'isnotempty', ''],
+        //     'AND', ['currency', 'anyof', String(currency)]
+        // ];
+        var baseFilters = [
+            // filter by customer
+            search.createFilter({
+                name: 'entity',                      // transaction's entity (customer)
+                operator: search.Operator.ANYOF,
+                values: String(cname)
+            }),
+
+            // filter by currency
+            search.createFilter({
+                name: 'currency',
+                operator: search.Operator.ANYOF,
+                values: String(currency)
+            }),
+
+            // customer last statement date (joined to customer)
+            search.createFilter({
+                name: 'custentity_upaya_last_statement_date',
+                join: 'customer',                    // <-- join, not in the name
+                operator: search.Operator.NOTON,
+                values: 'today'
+            }),
+
+            // customer email notif (joined to customer)
+            search.createFilter({
+                name: 'custentity_2663_email_address_notif',
+                join: 'customer',
+                operator: search.Operator.ISNOTEMPTY
+            })
         ];
 
-        var resultsAmount = [];
-
+        // 1) CASE: ARRIVAL_DATE parameter is set – single pass using that date
         if (!isEmpty(FILE_CONST.ARRIVAL_DATE)) {
 
-            var common = commonBase.concat([
-                'AND', ['custbody_arrival_date', 'onorafter', FILE_CONST.ARRIVAL_DATE]
-            ]);
+            var arrivalFilter = search.createFilter({
+                name: 'custbody_arrival_date',
+                operator: search.Operator.ONORAFTER,
+                values: FILE_CONST.ARRIVAL_DATE
+            });
 
+            var extraFilters = baseFilters.concat([arrivalFilter]);
 
-            var filtersSO = common.concat([
-                'AND', ['type', 'anyof', 'SalesOrd'],
-                'AND', [
-                    ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
-                    'OR',
-                    ['custbody_due_date', 'notafter', 'daysfromnow45']
-                ],
-                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
-                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
-                'AND', ['custbody_due_date', 'isnotempty', ''],
-                'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
-                'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
-            ]);
-
-
-            var filtersInvPT2 = common.concat([
-                'AND', ['type', 'anyof', 'CustInvc'],
-                'AND', [
-                    ['duedate', 'notafter', 'daysfromnow45'],
-                    'OR',
-                    ['custbody_arrival_date', 'notafter', 'daysfromnow45']
-                ],
-                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
-                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
-                'AND', ['status', 'anyof', 'CustInvc:A']
-            ]);
-
-            var filtersInvPT1 = common.concat([
-                'AND', ['type', 'anyof', 'CustInvc'],
-                'AND', ['customer.custentity_payment_type', 'anyof', '1'],
-                'AND', ['status', 'anyof', 'CustInvc:A']
-            ]);
-
-            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO));
-            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2));
-            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1));
+            resultsAmount = resultsAmount.concat(runSavedTransactionSearch(FILE_CONST.SEARCH_SO_PT2, extraFilters));
+            resultsAmount = resultsAmount.concat(runSavedTransactionSearch(FILE_CONST.SEARCH_INV_PT2, extraFilters));
+            resultsAmount = resultsAmount.concat(runSavedTransactionSearch(FILE_CONST.SEARCH_INV_PT1, extraFilters));
 
         } else {
+            // 2) CASE: no ARRIVAL_DATE – split before / after mid-date (like your old logic)
 
-            var commonBefore = commonBase.concat([
-                'AND', ['custbody_arrival_date', 'before', midDateStr]
-            ]);
-            var commonAfter = commonBase.concat([
-                'AND', ['custbody_arrival_date', 'onorafter', midDateStr]
-            ]);
-            var filtersSO_Before = commonBefore.concat([
-                'AND', ['type', 'anyof', 'SalesOrd'],
-                'AND', [
-                    ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
-                    'OR',
-                    ['custbody_due_date', 'notafter', 'daysfromnow45']
-                ],
-                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
-                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
-                'AND', ['custbody_due_date', 'isnotempty', ''],
-                'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
-                'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
-            ]);
+            var beforeFilter = search.createFilter({
+                name: 'custbody_arrival_date',
+                operator: search.Operator.BEFORE,
+                values: midDateStr
+            });
+            var afterFilter = search.createFilter({
+                name: 'custbody_arrival_date',
+                operator: search.Operator.ONORAFTER,
+                values: midDateStr
+            });
 
-            var filtersInvPT2_Before = commonBefore.concat([
-                'AND', ['type', 'anyof', 'CustInvc'],
-                'AND', [
-                    ['duedate', 'notafter', 'daysfromnow45'],
-                    'OR',
-                    ['custbody_arrival_date', 'notafter', 'daysfromnow45']
-                ],
-                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
-                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
-                'AND', ['status', 'anyof', 'CustInvc:A']
-            ]);
+            var filtersBefore = baseFilters.concat([beforeFilter]);
+            var filtersAfter = baseFilters.concat([afterFilter]);
 
-            var filtersInvPT1_Before = commonBefore.concat([
-                'AND', ['type', 'anyof', 'CustInvc'],
-                'AND', ['customer.custentity_payment_type', 'anyof', '1'],
-                'AND', ['status', 'anyof', 'CustInvc:A']
-            ]);
+            // --- BEFORE mid date ---
+            resultsAmount = resultsAmount.concat(runSavedTransactionSearch(FILE_CONST.SEARCH_SO_PT2, filtersBefore));
+            resultsAmount = resultsAmount.concat(runSavedTransactionSearch(FILE_CONST.SEARCH_INV_PT2, filtersBefore));
+            resultsAmount = resultsAmount.concat(runSavedTransactionSearch(FILE_CONST.SEARCH_INV_PT1, filtersBefore));
 
-            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO_Before));
-            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2_Before));
-            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1_Before));
-
-            var filtersSO_After = commonAfter.concat([
-                'AND', ['type', 'anyof', 'SalesOrd'],
-                'AND', [
-                    ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
-                    'OR',
-                    ['custbody_due_date', 'notafter', 'daysfromnow45']
-                ],
-                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
-                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
-                'AND', ['custbody_due_date', 'isnotempty', ''],
-                'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
-                'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
-            ]);
-
-            var filtersInvPT2_After = commonAfter.concat([
-                'AND', ['type', 'anyof', 'CustInvc'],
-                'AND', [
-                    ['duedate', 'notafter', 'daysfromnow45'],
-                    'OR',
-                    ['custbody_arrival_date', 'notafter', 'daysfromnow45']
-                ],
-                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
-                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
-                'AND', ['status', 'anyof', 'CustInvc:A']
-            ]);
-
-            var filtersInvPT1_After = commonAfter.concat([
-                'AND', ['type', 'anyof', 'CustInvc'],
-                'AND', ['customer.custentity_payment_type', 'anyof', '1'],
-                'AND', ['status', 'anyof', 'CustInvc:A']
-            ]);
-
-            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO_After));
-            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2_After));
-            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1_After));
+            // --- AFTER mid date ---
+            resultsAmount = resultsAmount.concat(runSavedTransactionSearch(FILE_CONST.SEARCH_SO_PT2, filtersAfter));
+            resultsAmount = resultsAmount.concat(runSavedTransactionSearch(FILE_CONST.SEARCH_INV_PT2, filtersAfter));
+            resultsAmount = resultsAmount.concat(runSavedTransactionSearch(FILE_CONST.SEARCH_INV_PT1, filtersAfter));
         }
 
-        log.audit('getTransactions', 'customer=' + cname + ' currency=' + currency +
-            ' | total=' + resultsAmount.length);
+        log.audit('getTransactions',
+            'customer=' + cname +
+            ' currency=' + currency +
+            ' | total results=' + resultsAmount.length);
 
         return resultsAmount;
     }
+
     //get balance
     function getBalance(cname, resultsAmount, currency) {
         log.audit('getBalance START', 'cname=' + cname + ' | currency=' + currency + ' | resultsAmount.length=' + (resultsAmount ? resultsAmount.length : 0));
@@ -387,42 +361,25 @@ define([
         return netAmount;
     }
 
-    var TRANSACTION_COLUMNS = [
-        search.createColumn({ name: 'internalid' }),
-        search.createColumn({ name: 'entity' }),
-        search.createColumn({ name: 'amount' }),
-        search.createColumn({ name: 'custbody_total_earmarks' }),
-        search.createColumn({ name: 'type' }),
-        search.createColumn({ name: 'custentity_payment_type', join: 'customer' }),
-        search.createColumn({ name: 'custbody_booking_number' }),
-        search.createColumn({ name: 'custbody_booking_status' }),
-        search.createColumn({ name: 'custbody_guest_names' }),
-        search.createColumn({ name: 'custbody_arrival_date' }),
-        search.createColumn({ name: 'custbody_departure_date' }),
-        search.createColumn({ name: 'custbody_tour_operator_order_number' }),
-        search.createColumn({ name: 'custentity_2663_email_address_notif', join: 'customer' }),
-        search.createColumn({ name: 'custbody_due_date' }),
-        search.createColumn({ name: 'custbody_provider_id' }),
-        search.createColumn({ name: 'duedate' }),
-        search.createColumn({ name: 'amountremaining' }),
-        search.createColumn({ name: 'fxamount' }),
-        search.createColumn({ name: 'fxamountremaining' }),
-        search.createColumn({ name: 'currency' }),
-        search.createColumn({ name: 'altname', join: 'CUSTBODY_CUSTOMER_ACCOUNT' }),
-        search.createColumn({ name: 'name', join: 'CUSTBODY_TRANSACTION_RESERVATION_LINK' }),
-        search.createColumn({ name: 'tranid' })
-    ];
 
-    function runTransactionSearch(filters) {
+    // Run a saved transaction search (by ID) with extra filters ANDed on top
+    function runSavedTransactionSearch(searchId, extraFilters) {
+        if (!searchId) {
+            return [];
+        }
+
         var allResults = [];
 
-        var s = search.create({
-            type: 'transaction',
-            filters: filters,
-            columns: TRANSACTION_COLUMNS
-        });
+        var s = search.load({ id: searchId });
+
+        if (extraFilters && extraFilters.length) {
+            extraFilters.forEach(function (f) {
+                s.filters.push(f);   // NetSuite automatically ANDs these
+            });
+        }
 
         var paged = s.runPaged({ pageSize: 500 });
+
         paged.pageRanges.forEach(function (pr) {
             var page = paged.fetch({ index: pr.index });
             page.data.forEach(function (res) {
@@ -432,6 +389,7 @@ define([
 
         return allResults;
     }
+
 
     // create PDF and Excel
     function createPDF(cusObj, netAmount, resultsAmount, statementDate, currency) {

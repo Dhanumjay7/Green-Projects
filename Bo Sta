@@ -1,4 +1,4 @@
-/**
+/** 
  * @NApiVersion 2.0
  * @NScriptType MapReduceScript
  * @NModuleScope SameAccount
@@ -16,7 +16,7 @@ define([
     var logoDefault = '3662874';
     var logoBrazil = '3662875';
 
-    // helper to read script parameter at runtime (safe)
+    // utility functions
     function getScriptParam(name) {
         try {
             var s = runtime.getCurrentScript();
@@ -51,7 +51,7 @@ define([
             var paramFilter = search.createFilter({
                 name: 'internalid',
                 join: 'customer',
-                operator: 'anyof',
+                operator: search.Operator.ANYOF,
                 values: defValue
             });
             statementSearch.filters.push(paramFilter);
@@ -61,7 +61,7 @@ define([
             var resumeFilter = search.createFilter({
                 name: 'internalidnumber',
                 join: 'customer',
-                operator: 'greaterthan',
+                operator: search.Operator.GREATERTHAN,
                 values: FILE_CONST.RESUME_FROM_CUSTOMER
             });
             statementSearch.filters.push(resumeFilter);
@@ -125,7 +125,7 @@ define([
         }
     }
 
-    /************** Entry point: summarize **************/
+  
     function summarize(summary) {
         log.audit('Summary complete', JSON.stringify(summary));
         if (summary.inputSummary.error)
@@ -137,7 +137,7 @@ define([
         });
     }
 
-    /************** Build customer object (safe non-dynamic) **************/
+    //build customer object
     function buildCustomerObject(customerRecord, custId) {
         var obj = {};
         obj.cname = custId;
@@ -174,82 +174,161 @@ define([
 
         return obj;
     }
-
-
-
+    //get transactions
     function getTransactions(cname, currency) {
-        // currency is internal ID (1 = USD, 2 = GBP, 4 = EUR)
-        // cname is customer internal ID
+        var FILE_CONST = getFileConst();
 
-        var FILE_CONST = getFileConst();   // you already have this helper
 
-        // --------- COMMON FILTERS (used in all 3 queries) ----------
-        var common = [
+        var startdate = new Date(2016, 0, 1);
+        var enddate = new Date();
+        var middate = new Date((startdate.getTime() + enddate.getTime()) / 2);
+        var midDateStr = String(middate.getMonth() + 1) + "/" +
+            String(middate.getDate()) + "/" +
+            String(middate.getFullYear());
+
+        // common filters
+        var commonBase = [
             ['customermain.internalidnumber', 'equalto', String(cname)],
-            'AND', ['subsidiary', 'anyof', '33'],                           // same as saved search
+            'AND', ['subsidiary', 'anyof', '33'],
             'AND', ['mainline', 'is', 'T'],
             'AND', ['customer.custentity_upaya_last_statement_date', 'noton', 'today'],
             'AND', ['customer.custentity_2663_email_address_notif', 'isnotempty', ''],
             'AND', ['currency', 'anyof', String(currency)]
         ];
 
-        // optional ARRIVAL_DATE script parameter
-        if (!isEmpty(FILE_CONST.ARRIVAL_DATE)) {
-            common.push('AND');
-            common.push(['custbody_arrival_date', 'onorafter', FILE_CONST.ARRIVAL_DATE]);
-        }
-
-        // --------- 1) SALES ORDERS branch ----------
-        var filtersSO = common.concat([
-            'AND', ['type', 'anyof', 'SalesOrd'],
-            'AND', [
-                ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
-                'OR',
-                ['custbody_due_date', 'notafter', 'daysfromnow45']
-            ],
-            'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
-            'AND', ['customer.custentity_payment_type', 'anyof', '2'],
-            'AND', ['custbody_due_date', 'isnotempty', ''],
-            'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
-            'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
-        ]);
-
-        // --------- 2) INVOICES, payment type = 2 ----------
-        var filtersInvPT2 = common.concat([
-            'AND', ['type', 'anyof', 'CustInvc'],
-            'AND', [
-                ['duedate', 'notafter', 'daysfromnow45'],
-                'OR',
-                ['custbody_arrival_date', 'notafter', 'daysfromnow45']
-            ],
-            'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
-            'AND', ['customer.custentity_payment_type', 'anyof', '2'],
-            'AND', ['status', 'anyof', 'CustInvc:A']
-        ]);
-
-        // --------- 3) INVOICES, payment type = 1 ----------
-        var filtersInvPT1 = common.concat([
-            'AND', ['type', 'anyof', 'CustInvc'],
-            'AND', ['customer.custentity_payment_type', 'anyof', '1'],
-            'AND', ['status', 'anyof', 'CustInvc:A']
-        ]);
-
-        // --------- RUN 3 LIGHTER SEARCHES AND MERGE RESULTS ----------
         var resultsAmount = [];
 
-        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO));
-        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2));
-        resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1));
+        if (!isEmpty(FILE_CONST.ARRIVAL_DATE)) {
+
+            var common = commonBase.concat([
+                'AND', ['custbody_arrival_date', 'onorafter', FILE_CONST.ARRIVAL_DATE]
+            ]);
+
+
+            var filtersSO = common.concat([
+                'AND', ['type', 'anyof', 'SalesOrd'],
+                'AND', [
+                    ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
+                    'OR',
+                    ['custbody_due_date', 'notafter', 'daysfromnow45']
+                ],
+                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
+                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+                'AND', ['custbody_due_date', 'isnotempty', ''],
+                'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
+                'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
+            ]);
+
+
+            var filtersInvPT2 = common.concat([
+                'AND', ['type', 'anyof', 'CustInvc'],
+                'AND', [
+                    ['duedate', 'notafter', 'daysfromnow45'],
+                    'OR',
+                    ['custbody_arrival_date', 'notafter', 'daysfromnow45']
+                ],
+                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
+                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+                'AND', ['status', 'anyof', 'CustInvc:A']
+            ]);
+
+            var filtersInvPT1 = common.concat([
+                'AND', ['type', 'anyof', 'CustInvc'],
+                'AND', ['customer.custentity_payment_type', 'anyof', '1'],
+                'AND', ['status', 'anyof', 'CustInvc:A']
+            ]);
+
+            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO));
+            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2));
+            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1));
+
+        } else {
+
+            var commonBefore = commonBase.concat([
+                'AND', ['custbody_arrival_date', 'before', midDateStr]
+            ]);
+            var commonAfter = commonBase.concat([
+                'AND', ['custbody_arrival_date', 'onorafter', midDateStr]
+            ]);
+            var filtersSO_Before = commonBefore.concat([
+                'AND', ['type', 'anyof', 'SalesOrd'],
+                'AND', [
+                    ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
+                    'OR',
+                    ['custbody_due_date', 'notafter', 'daysfromnow45']
+                ],
+                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
+                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+                'AND', ['custbody_due_date', 'isnotempty', ''],
+                'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
+                'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
+            ]);
+
+            var filtersInvPT2_Before = commonBefore.concat([
+                'AND', ['type', 'anyof', 'CustInvc'],
+                'AND', [
+                    ['duedate', 'notafter', 'daysfromnow45'],
+                    'OR',
+                    ['custbody_arrival_date', 'notafter', 'daysfromnow45']
+                ],
+                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
+                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+                'AND', ['status', 'anyof', 'CustInvc:A']
+            ]);
+
+            var filtersInvPT1_Before = commonBefore.concat([
+                'AND', ['type', 'anyof', 'CustInvc'],
+                'AND', ['customer.custentity_payment_type', 'anyof', '1'],
+                'AND', ['status', 'anyof', 'CustInvc:A']
+            ]);
+
+            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO_Before));
+            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2_Before));
+            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1_Before));
+
+            var filtersSO_After = commonAfter.concat([
+                'AND', ['type', 'anyof', 'SalesOrd'],
+                'AND', [
+                    ['custbody_arrival_date', 'notafter', 'daysfromnow45'],
+                    'OR',
+                    ['custbody_due_date', 'notafter', 'daysfromnow45']
+                ],
+                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'OrdDep'],
+                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+                'AND', ['custbody_due_date', 'isnotempty', ''],
+                'AND', ['custbody_net_avail_to_earmark', 'notequalto', '0.00'],
+                'AND', ['status', 'anyof', 'SalesOrd:B', 'SalesOrd:D', 'SalesOrd:E', 'SalesOrd:F']
+            ]);
+
+            var filtersInvPT2_After = commonAfter.concat([
+                'AND', ['type', 'anyof', 'CustInvc'],
+                'AND', [
+                    ['duedate', 'notafter', 'daysfromnow45'],
+                    'OR',
+                    ['custbody_arrival_date', 'notafter', 'daysfromnow45']
+                ],
+                'AND', ['applyingtransaction.appliedtolinktype', 'noneof', 'DepAppl'],
+                'AND', ['customer.custentity_payment_type', 'anyof', '2'],
+                'AND', ['status', 'anyof', 'CustInvc:A']
+            ]);
+
+            var filtersInvPT1_After = commonAfter.concat([
+                'AND', ['type', 'anyof', 'CustInvc'],
+                'AND', ['customer.custentity_payment_type', 'anyof', '1'],
+                'AND', ['status', 'anyof', 'CustInvc:A']
+            ]);
+
+            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersSO_After));
+            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT2_After));
+            resultsAmount = resultsAmount.concat(runTransactionSearch(filtersInvPT1_After));
+        }
 
         log.audit('getTransactions', 'customer=' + cname + ' currency=' + currency +
-            ' | SO=' + resultsAmount.length);
+            ' | total=' + resultsAmount.length);
 
         return resultsAmount;
     }
-
-
-
-    /************** getBalance **************/
+    //get balance
     function getBalance(cname, resultsAmount, currency) {
         log.audit('getBalance START', 'cname=' + cname + ' | currency=' + currency + ' | resultsAmount.length=' + (resultsAmount ? resultsAmount.length : 0));
         var clientBalance = 0;
@@ -308,8 +387,6 @@ define([
         return netAmount;
     }
 
-    /************** runSearchPaged - NEW: simple search.create instead of saved search **************/
-    // Re-usable transaction columns (based on your saved search + script usage)
     var TRANSACTION_COLUMNS = [
         search.createColumn({ name: 'internalid' }),
         search.createColumn({ name: 'entity' }),
@@ -336,7 +413,6 @@ define([
         search.createColumn({ name: 'tranid' })
     ];
 
-    // run a single search with paging and return ALL results as an array
     function runTransactionSearch(filters) {
         var allResults = [];
 
@@ -346,7 +422,7 @@ define([
             columns: TRANSACTION_COLUMNS
         });
 
-        var paged = s.runPaged({ pageSize: 500 }); // smaller page size is fine
+        var paged = s.runPaged({ pageSize: 500 });
         paged.pageRanges.forEach(function (pr) {
             var page = paged.fetch({ index: pr.index });
             page.data.forEach(function (res) {
@@ -357,9 +433,7 @@ define([
         return allResults;
     }
 
-
-
-    /************** createPDF (full pdf + excel creation) **************/
+    // create PDF and Excel
     function createPDF(cusObj, netAmount, resultsAmount, statementDate, currency) {
         try {
             log.audit('createPDF START', 'netAmount=' + netAmount + ' | currency=' + currency);
@@ -378,6 +452,7 @@ define([
 
             var today = getTimestamp();
 
+
             var img;
             try {
                 img = (customerTemplate == brazilTemplate) ? file.load({ id: logoBrazil }) : file.load({ id: logoDefault });
@@ -395,6 +470,7 @@ define([
             strNamePic += "<img src=\"" + path + "\"></img>";
             strNamePic += "</td></tr></table>";
 
+            //Header Table
             var strName = "<table>";
             strName += "<tr><td></td><td>Customer:</td><td>" + xmlMod.escape({ xmlText: customerName }) + "</td></tr>";
             strName += "<tr><td></td><td>Address:</td><td>" + xmlMod.escape({ xmlText: customeraddress }) + "</td></tr>";
@@ -406,12 +482,29 @@ define([
             strName += "<tr><td></td><td>Amount Due:</td><td>" + currencySymbol + " " + netAmount + "</td></tr>";
             strName += "</table>";
 
-            var strName2 = '<table width="100%" border="1" style="border-color: #808080; border-collapse:collapse;">';
+            // DETAIL TABLE (with borders)
+
+            var tableBorderStyle = "border:0.5pt solid #808080; border-collapse:collapse;";
+            var headerCellStyle = "border:0.5pt solid #808080; padding-left:5px;";
+            var bodyCellStyle = "border:0.5pt solid #808080; padding-left:5px;";
+
+            var strName2 = '<table width="100%" style="' + tableBorderStyle + '">';
             strName2 += '<thead>';
             strName2 += '<tr style="font-weight:bold; font-size:8px; background-color:Gray; color:#FFFFFF;">';
-            strName2 += '<th>Hotel Name</th><th>Account #</th><th>Reservation #</th><th>Your Ref. #</th><th>Arrival</th><th>Departure</th><th>Guest(s) Name</th><th>Due Date</th><th>Reservation Value</th><th>Amount Due</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Hotel Name</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Account #</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Reservation #</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Your Ref. #</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Arrival</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Departure</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Guest(s) Name</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Due Date</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Reservation Value</th>';
+            strName2 += '<th style="' + headerCellStyle + '">Amount Due</th>';
             strName2 += '</tr></thead>';
 
+
+            // Excel XML header (unchanged)
             var xmlString = '<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?>';
             xmlString += '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40">';
             xmlString += '<Worksheet ss:Name="Sheet1"><Table>';
@@ -447,7 +540,8 @@ define([
                     amount = resultsget.getValue('amount') || resultsget.getValue('fxamount') || 0;
                 }
 
-                var booknum = resultsget.getValue({ name: 'name', join: 'CUSTBODY_TRANSACTION_RESERVATION_LINK' }) || resultsget.getValue({ name: 'custbody_booking_number' });
+                var booknum = resultsget.getValue({ name: 'name', join: 'CUSTBODY_TRANSACTION_RESERVATION_LINK' }) ||
+                    resultsget.getValue({ name: 'custbody_booking_number' });
                 var guest = resultsget.getValue({ name: "custbody_guest_names" }) || '';
                 var arrival = resultsget.getValue({ name: "custbody_arrival_date" }) || '';
                 var departure = resultsget.getValue({ name: "custbody_departure_date" }) || '';
@@ -476,7 +570,8 @@ define([
                     dueDate = resultsget.getValue({ name: "custbody_due_date" }) || '';
                     amountRem = getnumber(amount) - getnumber(depositamount);
                 } else {
-                    dueDate = resultsget.getValue({ name: "custbody_due_date" }) || resultsget.getValue({ name: "duedate" }) || '';
+                    dueDate = resultsget.getValue({ name: "custbody_due_date" }) ||
+                        resultsget.getValue({ name: "duedate" }) || '';
                     if (currency != 1) {
                         amountRem = getnumber(resultsget.getValue({ name: "fxamountremaining" })) || 0;
                     } else {
@@ -489,13 +584,14 @@ define([
                 if (amountRem > 0) {
                     var agingdays = 0;
                     if (dueDate) agingdays = days_between(statementDate, dueDate);
-                    if (agingdays == 0 || agingdays < 0) { agingCurrent += getnumber(amountRem); }
-                    else if (agingdays <= 30 && agingdays >= 1) { agingStage1 += getnumber(amountRem); }
-                    else if (agingdays <= 60 && agingdays >= 31) { agingStage2 += getnumber(amountRem); }
-                    else if (agingdays <= 90 && agingdays >= 61) { agingStage3 += getnumber(amountRem); }
-                    else if (agingdays >= 90) { agingStage4 += getnumber(amountRem); }
+                    if (agingdays <= 0) { agingCurrent += getnumber(amountRem); }
+                    else if (agingdays <= 30) { agingStage1 += getnumber(amountRem); }
+                    else if (agingdays <= 60) { agingStage2 += getnumber(amountRem); }
+                    else if (agingdays <= 90) { agingStage3 += getnumber(amountRem); }
+                    else { agingStage4 += getnumber(amountRem); }
                     agingStage5 += getnumber(amountRem);
 
+                    // Excel row
                     xmlString += '<Row>';
                     xmlString += '<Cell><Data ss:Type="String">' + (provider || '') + '</Data></Cell>';
                     xmlString += '<Cell><Data ss:Type="String">' + (account || '') + '</Data></Cell>';
@@ -510,21 +606,23 @@ define([
                     xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(amountRem) + '</Data></Cell>';
                     xmlString += '</Row>';
 
+                    // PDF row with **borders**
                     strName2 += "<tr>";
-                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: provider }) + '</td>';
-                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: account }) + '</td>';
-                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: booknum }) + '</td>';
-                    strName2 += '<td style="padding-left:5px;">' + xmlMod.escape({ xmlText: refNo }) + '</td>';
-                    strName2 += '<td>' + (arrival || '') + '</td>';
-                    strName2 += '<td>' + (departure || '') + '</td>';
-                    strName2 += '<td>' + xmlMod.escape({ xmlText: guest }) + '</td>';
-                    strName2 += '<td>' + (dueDate || '') + '</td>';
-                    strName2 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(amount) + '</td>';
-                    strName2 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(amountRem) + '</td>';
-                    strName2 += "</tr><tr></tr>";
+                    strName2 += '<td style="' + bodyCellStyle + '">' + xmlMod.escape({ xmlText: provider }) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + xmlMod.escape({ xmlText: account }) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + xmlMod.escape({ xmlText: booknum }) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + xmlMod.escape({ xmlText: refNo }) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + (arrival || '') + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + (departure || '') + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + xmlMod.escape({ xmlText: guest }) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + '">' + (dueDate || '') + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(amount) + '</td>';
+                    strName2 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(amountRem) + '</td>';
+                    strName2 += "</tr>";
                 }
             }
 
+            // finish Excel aging
             xmlString += '<Row><Cell><Data ss:Type="String"></Data></Cell></Row>';
             xmlString += '<Row><Cell><Data ss:Type="String">Aging</Data></Cell></Row>';
             xmlString += '<Row><Cell><Data ss:Type="String">Current</Data></Cell><Cell><Data ss:Type="String">1-30 Days</Data></Cell><Cell><Data ss:Type="String">31-60 Days</Data></Cell><Cell><Data ss:Type="String">61-90 Days</Data></Cell><Cell><Data ss:Type="String">Over 90 Days</Data></Cell><Cell><Data ss:Type="String">Total</Data></Cell></Row>';
@@ -536,6 +634,7 @@ define([
             xmlString += '<Cell><Data ss:Type="String">' + currencySymbol + '  ' + formatMoney(agingStage5.toFixed(2)) + '</Data></Cell></Row>';
             xmlString += '</Table></Worksheet></Workbook>';
 
+            // create Excel file
             var strXmlEncoded = encode.convert({ string: xmlString, inputEncoding: encode.Encoding.UTF_8, outputEncoding: encode.Encoding.BASE_64 });
             var objXlsFile = file.create({
                 name: (currency == 2 ? 'ExcelGBP_' : 'ExcelUSD_') + customerName + '_' + today + '.xls',
@@ -545,16 +644,28 @@ define([
             objXlsFile.folder = folderID;
             var excelFileId = objXlsFile.save();
 
+
+            // Aging table for PDF (with borders)
+
             strName2 += '</table>';
             var strNameSpace = '<table><tr><td></td><td></td><td></td></tr></table>';
-            var strName3 = '<table width="100%" border="1" style="border-color:#808080;border-collapse:collapse;"><tr style="font-weight:bold;background-color:Gray;color:#FFFFFF;"><th>Current</th><th>1-30 Days</th><th>31-60 Days</th><th>61-90 Days</th><th>Over 90 Days</th><th>Total</th></tr>';
+
+            var strName3 = '<table width="100%" style="' + tableBorderStyle + '">';
+            strName3 += '<tr style="font-weight:bold; background-color:Gray; color:#FFFFFF;">';
+            strName3 += '<th style="' + headerCellStyle + '">Current</th>';
+            strName3 += '<th style="' + headerCellStyle + '">1-30 Days</th>';
+            strName3 += '<th style="' + headerCellStyle + '">31-60 Days</th>';
+            strName3 += '<th style="' + headerCellStyle + '">61-90 Days</th>';
+            strName3 += '<th style="' + headerCellStyle + '">Over 90 Days</th>';
+            strName3 += '<th style="' + headerCellStyle + '">Total</th>';
+            strName3 += '</tr>';
             strName3 += '<tr>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingCurrent.toFixed(2)) + '</td>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage1.toFixed(2)) + '</td>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage2.toFixed(2)) + '</td>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage3.toFixed(2)) + '</td>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage4.toFixed(2)) + '</td>';
-            strName3 += '<td style="text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage5.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingCurrent.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage1.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage2.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage3.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage4.toFixed(2)) + '</td>';
+            strName3 += '<td style="' + bodyCellStyle + ' text-align:right;">' + currencySymbol + '  ' + formatMoney(agingStage5.toFixed(2)) + '</td>';
             strName3 += '</tr></table>';
 
             var payLinkURL = getPayLinkURL(cname);
@@ -583,8 +694,7 @@ define([
                 log.audit('attach error', attErr);
             }
 
-            var createdFiles = { pdf: pdfFileId, excel: excelFileId };
-            return createdFiles;
+            return { pdf: pdfFileId, excel: excelFileId };
 
         } catch (err) {
             log.error('createPDF error', err);
@@ -661,25 +771,51 @@ define([
         }
     }
 
-    /************** getPayLinkURL **************/
-    function getPayLinkURL(custId) {
+    /************** getPayLinkURL (FIXED) **************/
+    function getPayLinkURL(cname) {
         try {
             var payLinkURL = '';
+
+            // Build filters as real Filter objects so "filters is expected as Array" never happens
+            var filters = [
+                search.createFilter({
+                    name: 'type',
+                    operator: search.Operator.ANYOF,
+                    values: 'SalesOrd'
+                }),
+                search.createFilter({
+                    name: 'mainline',
+                    operator: search.Operator.IS,
+                    values: 'T'
+                }),
+                search.createFilter({
+                    name: 'status',
+                    operator: search.Operator.ANYOF,
+                    values: 'SalesOrd:B'
+                }),
+                search.createFilter({
+                    name: 'custbody_mes_invl_end_customer_link',
+                    operator: search.Operator.ISNOTEMPTY
+                    // no values needed
+                }),
+                search.createFilter({
+                    name: 'internalidnumber',
+                    join: 'customerMain',
+                    operator: search.Operator.EQUALTO,
+                    values: String(cname)
+                })
+            ];
+
             var salesorderSearchObj = search.create({
-                type: 'salesorder',
-                filters: [
-                    ['type', 'anyof', 'SalesOrd'],
-                    'AND', ['mainline', 'is', 'T'],
-                    'AND', ['status', 'anyof', 'SalesOrd:B'],
-                    'AND', ['custbody_mes_invl_end_customer_link', 'isnotempty'],
-                    'AND', ['customermain.internalidnumber', 'equalto', custId]
-                ],
+                type: search.Type.SALES_ORDER,
+                filters: filters,
                 columns: [
                     search.createColumn({ name: 'trandate', sort: search.Sort.ASC }),
                     search.createColumn({ name: 'tranid' }),
                     search.createColumn({ name: 'custbody_mes_invl_end_customer_link' })
                 ]
             });
+
             var searchResultCount = salesorderSearchObj.runPaged().count;
             if (searchResultCount > 0) {
                 var searchResult = salesorderSearchObj.run().getRange({ start: 0, end: 1 });
@@ -757,7 +893,6 @@ define([
         return year + month + day + hour + minute + second;
     }
 
-    /************** Expose entry points **************/
     return {
         getInputData: getInputData,
         reduce: reduce,

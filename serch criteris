@@ -5,3 +5,9 @@ category!= supplier -> Customer Invoice, Customer CM
 Voucher Invoice
 Tran Type = Itenary only
  
+CASE 
+    WHEN {customer.category} = 'Supplier' 
+        THEN 'Vendor Invoice / Vendor CM'
+    ELSE 
+        'Customer Invoice / Customer CM'
+END

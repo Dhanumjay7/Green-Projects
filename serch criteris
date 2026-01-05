@@ -1,13 +1,29 @@
-customer category = Supplier -> VEndor Inv, vendor Cm
- 
-category!= supplier -> Customer Invoice, Customer CM
- 
-Voucher Invoice
-Tran Type = Itenary only
- 
-CASE 
-    WHEN {customer.category} = 'Supplier' 
-        THEN 'Vendor Invoice / Vendor CM'
-    ELSE 
-        'Customer Invoice / Customer CM'
-END
+Solution / Implementation
+
+Updated getInputData() in the Map/Reduce script to:
+
+Programmatically read all saved search columns.
+
+Safely recreate each column using search.createColumn() (to avoid NetSuite caching/column mutation issues).
+
+Apply deterministic sorting rules:
+
+GROUP columns → ASC
+
+SUM / numeric summary columns → DESC
+
+Formula (currency / numeric) columns → DESC
+
+Other columns → ASC
+
+Reassign the rebuilt column list back to the saved search.
+
+Return the modified search object to the Map stage.
+
+Added debug logging to validate:
+
+Total column count.
+
+Applied sort direction per column.
+
+Preview of search results during testing.

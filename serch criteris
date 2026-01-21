@@ -1,1 +1,4 @@
-Noticed the script run time seems longer than usual, perhaps because volume for august was larger than usual? This is used twice on days of ACS Close and it’s one of the tasks that everyone has to wait on to proceed with next steps, so it’s important to reduce the time as much as possible. 
+Record Type	Record ID	Document Number	Vendor ID	Message
+invoice	49904522	INV601-1141141	VEN10000003 Susan Beth Wilcox	Inactive Agent ID-0021SX
+invoice	49919565	INV601-1143240	VEN10000003 Susan Beth Wilcox	Inactive Agent ID-0021SX
+invoice	49919574	INV601-1143256	VEN10000003 Susan Beth Wilcox	Inactive Agent ID-0021SX

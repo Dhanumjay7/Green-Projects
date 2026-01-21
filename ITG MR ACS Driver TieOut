@@ -2,760 +2,295 @@
  * @NApiVersion 2.0
  * @NScriptType MapReduceScript
  * @NModuleScope Public
- * Implemented By: Vasavi Ramya Yarabarla
- * Date: 05/06/2024
+ * @Description: ITG MR ACS Driver TieOut – Optimized (Legacy CSV preserved)
  */
 
-
 define(['N/search', 'N/config', 'N/runtime', 'N/email', 'N/file'],
+function (search, config, runtime, email, file) {
 
-    function (search, config, runtime, email, file) {
-        var currentScript   = runtime.getCurrentScript();
-       
-        var FILE_CONST = {
-            SCRIPT_PARAM: {
-                ACS_DRIVER_SEARCH: currentScript.getParameter('custscript_acs_driver_search'),
-                ACS_PDF_SEC_SUMM_SEARCH: currentScript.getParameter('custscript_acs_pdf_sec_summ_search'),
-                ACS_SUPP_COMM_SUMM_SEARCH: currentScript.getParameter('custscript_acs_supp_comm_summary_srch'),
-                PERIOD: currentScript.getParameter('custscript_tlg_mr_driver_prd'),
-                SUB: currentScript.getParameter('custscript_tlg_mr_driver_subs'),
-                FOLDER_ID: currentScript.getParameter('custscript_itg_folder_id')        
-            }
-        }
+    var script = runtime.getCurrentScript();
 
-    
-        function GetInputData() {
-            try {    
-                
-                var periodID = FILE_CONST.SCRIPT_PARAM.PERIOD;
-                var periodName = GetPeriodName(periodID);
-                
-                var searchType = '';
-    
-                //Load Search 1 - TLG Agent Commission Statement Driver Search
-                var driverSearch = search.load({ id: FILE_CONST.SCRIPT_PARAM.ACS_DRIVER_SEARCH });
-                searchType = 'DRIVER_SEARCH';
-                var driverSearchResults = getResults(driverSearch, searchType);
-                
-                var driverAgentCodes = [];
-                for(var i=0; driverSearchResults && i < driverSearchResults.length; i++){
-                    var agentCode = driverSearchResults[i].getValue('custrecord_tlg_acs_agent_code');
-                    driverAgentCodes.push(agentCode);
-                }
-                log.debug('driverAgentCodes', 'GETINPUT driverAgentCodes: '+driverAgentCodes);
-               
-    
-    
-                //RUN SEARCH 2 and 3 and get Agent Codes
-                //Search 2 - [New] ACS PDF Section Summary By Agent By Section
-                var agentCodesBySection = [];
-    
-
-                //Load Search 2- ACS PDF Section Summary By Agent By Section Search
-                var acsPDFSearch = search.load({ id: FILE_CONST.SCRIPT_PARAM.ACS_PDF_SEC_SUMM_SEARCH });
-                searchType = 'ACS_PDF_SEARCH';
-                var acsPDFSearchResults = getResults(acsPDFSearch, searchType);
-                log.debug('acsPDFSearchResults', 'GETINPUT acsPDFSearchResults: '+JSON.stringify(acsPDFSearchResults));
-               
-    
-                
-                var stringifyVals = JSON.stringify(acsPDFSearchResults);
-                var cleanStr = stringifyVals.replace(/[()]/g, '');
-                var newObj = JSON.parse(cleanStr);  
-    
-                for(var j=0; acsPDFSearchResults && j < acsPDFSearchResults.length; j++){               
-                    var agentCode = newObj[j].values.GROUPcustcol_agent_ext_id;
-                    
-                    if(agentCodesBySection.indexOf(agentCode) == -1){
-                        agentCodesBySection.push(agentCode);
-                    }
-                }
-                
-    
-                //Load Search 3- ACS PDF Supplier Comm Section Summary By Agent By Section Search
-                var suppCommSearch = search.load({ id: FILE_CONST.SCRIPT_PARAM.ACS_SUPP_COMM_SUMM_SEARCH });
-                searchType = 'SUPP_COMM_SEARCH';
-                var suppCommSearchResults = getResults(suppCommSearch, searchType);
-                log.debug('suppCommSearchResults', 'GETINPUT suppCommSearchResults: '+JSON.stringify(suppCommSearchResults));
-               
-                
-                var stringifyVals = JSON.stringify(suppCommSearchResults);
-                var cleanStr = stringifyVals.replace(/[()]/g, '');
-                var newObj = JSON.parse(cleanStr);  
-    
-                for(var k=0; suppCommSearchResults && k < suppCommSearchResults.length; k++){
-                    var agentCode = newObj[k].values.GROUPcustrecord_tlg_hotel_comm_agent_code;
-                   
-                    if(agentCodesBySection.indexOf(agentCode) == -1){
-                        agentCodesBySection.push(agentCode);
-                    }
-                }
-                log.debug('agentCodesBySection', 'GETINPUT agentCodesBySection: '+agentCodesBySection);
-     
-    
-                var missingAgentCodes = [];
-                for(var i=0; i < agentCodesBySection.length; i++){
-                    if(driverAgentCodes.indexOf(agentCodesBySection[i]) == -1){
-                        if(missingAgentCodes.indexOf(agentCodesBySection[i]) == -1){ 
-                            missingAgentCodes.push(agentCodesBySection[i]); 
-                        }
-                    }
-                }
-                
-                log.debug('missingAgentCodes', 'GETINPUT missingAgentCodes: '+missingAgentCodes);
-
-                if(missingAgentCodes  == '' || missingAgentCodes == null || missingAgentCodes == undefined || missingAgentCodes == "- None -"){
-                    var configRecObj = config.load({ type: config.Type.COMPANY_PREFERENCES });
-                    var emailFrom = configRecObj.getValue('custscript_error_email_author');
-                    //log.debug('emailFrom: ', emailFrom);
-
-                    var loginEmployeName = runtime.getCurrentUser();
-                    //log.debug('loginEmployeName: ', loginEmployeName);
-                    
-                    email.send({
-                        author: emailFrom,
-                        recipients: loginEmployeName.email,
-                        subject: 'No Missing Agent Codes',
-                        body: 'All the Agent Codes has Driver records created.'
-                    });
-
-                    
-                }
-
-                return missingAgentCodes;
-
-            } catch (ex) {
-                log.error('Error in getInputData::', JSON.stringify(ex));
-                var configRecObj = config.load({ type: config.Type.COMPANY_PREFERENCES });
-                var emailFrom = configRecObj.getValue('custscript_error_email_author');
-                log.debug('emailFrom: ', emailFrom);
-
-
-                var loginEmployeName = runtime.getCurrentUser();
-                log.debug('loginEmployeName: ', loginEmployeName);
-                
-                email.send({
-                    author: emailFrom,
-                    recipients: loginEmployeName.email,
-                    subject: 'ACS Tie Out Error',
-                    body: ex.message
-                });
-            }
-            
-        }
-    
-        function Map(context) {			
-            try{
-                log.debug('results', 'Map1:: '+JSON.stringify(context));
-
-                var key = JSON.parse(context.key); 
-                var value = context.value;        
-                
-                //log.debug('results', 'Map Key:: '+key);
-                //log.debug('results', 'Map Value:: '+value);
-
-                context.write(key, value);
-
-            }
-            catch(ex){
-                log.error('Error in Map::', JSON.stringify(ex));
-
-                var configRecObj = config.load({ type: config.Type.COMPANY_PREFERENCES });
-                var emailFrom = configRecObj.getValue('custscript_error_email_author');
-                log.debug('emailFrom: ', emailFrom);
-
-
-                var loginEmployeName = runtime.getCurrentUser();
-                log.debug('loginEmployeName: ', loginEmployeName);
-                
-                email.send({
-                    author: emailFrom,
-                    recipients: loginEmployeName.email,
-                    subject: 'ACS Tie Out Error',
-                    body: ex.message
-                });
-            }      
-        }
-      
-        function Reduce(context) {			
-           try{
-            var fileName = 'Missing Vendor Codes Details';
-            
-            var driverSubsidiary = FILE_CONST.SCRIPT_PARAM.SUB;               
-            var missingAgentCode = context.values[0];
-            log.debug('missingAgentCode', 'REDUCE missingAgentCode: '+missingAgentCode);
-
-            
-            if(missingAgentCode != '' && missingAgentCode != "null" && missingAgentCode != "- None -" && missingAgentCode != undefined){
-                var results = getMissingAgentCodesTransactions(missingAgentCode, driverSubsidiary); 
-                var finalRecIDs = [];
-
-                if(results){
-                    //CHECK 1 - Check if ACS number is missing
-                    var missingACSNumRecIDs = checkACSNumberIsNull(results);
-                    if(missingACSNumRecIDs && missingACSNumRecIDs.length > 0){
-                        finalRecIDs.concat(missingACSNumRecIDs);
-                    }
-                    
-                    //CHECK 2 - Check if vendor is Inactive
-                    var inactiveAgentTranIDs = checkInactiveAgents(results);
-                    //log.debug('inactiveAgentTranIDs', 'inactiveAgentTranIDs Length: '+inactiveAgentTranIDs.length);
-                        
-                    if(inactiveAgentTranIDs && inactiveAgentTranIDs.length > 0){
-                        finalRecIDs  += inactiveAgentTranIDs;
-                    }
-
-                    //CHECK 3 - No driver needed if there are only void lines               
-                    var nonVoidtranIDs = checkVoidTransactions(results);
-                    if(nonVoidtranIDs && nonVoidtranIDs.length > 0){
-                        finalRecIDs.concat(nonVoidtranIDs);
-                    }               
-                }
-
-                log.debug('finalRecIDs', 'REDUCE finalRecIDs: '+finalRecIDs);
-
-                if(finalRecIDs != '' && finalRecIDs != null){
-                    context.write(fileName, finalRecIDs);
-                }
-            }
-            //If missing Agent code is present
-   	   		 
-           }
-           catch(ex){           
-                log.debug('Error in REDUCE::', JSON.stringify(ex));
-
-                var configRecObj = config.load({ type: config.Type.COMPANY_PREFERENCES });
-                var emailFrom = configRecObj.getValue('custscript_error_email_author');
-                log.debug('emailFrom: ', emailFrom);
-
-                var loginEmployeName = runtime.getCurrentUser();
-                log.debug('loginEmployeName: ', loginEmployeName);
-                
-                email.send({
-                    author: emailFrom,
-                    recipients: loginEmployeName.email,
-                    subject: 'ACS Tie Out Error',
-                    body: ex.message
-                });
-
-           }
-        }
-    
-        function Summarize(context){
-            try{
-                log.debug('SUMMARIZE','SUMMARIZE');
-                                   
-                var contents = []; 
-                context.output.iterator().each(function (key, value) {
-                    
-                    log.debug('Key','SUMMARIZE Key:  '+key);
-                    log.debug('Value','SUMMARIZE Value:  '+value);
-                     
-                    contents.push(value);
-                    return true;
-                });
-
-                //log.debug('contents','SUMMARIZE contents:  '+contents);
-                log.debug('contents','SUMMARIZE contents length:  '+contents.length);
-
-                //if(contents.length > 0){
-                    createCSVFIle(contents);  
-                //}           
-            }
-            catch(ex){
-                log.debug('ex', 'Error in SUMMARIZE ex: '+JSON.stringify(ex));
-            }
-        }
-
-        
-
-        //CREATE CSV FILE
-        function createCSVFIle(contents){
-            try{
-                var driverSubsidiary = FILE_CONST.SCRIPT_PARAM.SUB;  
-
-                var subName = GetSubName(driverSubsidiary);
-
-                var folderID = FILE_CONST.SCRIPT_PARAM.FOLDER_ID;
-
-                log.debug('contents', 'FUNC contents: '+contents);
-                log.debug('contents', 'FUNC contents length: '+contents.length);
-                
-                var inactiveVendorsOfDrivers = getInactiveVendorsOfDriverRecords();
-                log.debug('inactiveVendorsOfDrivers', 'FUNC inactiveVendorsOfDrivers: '+inactiveVendorsOfDrivers);
-               
-
-                var newFileNameString = subName + '_ACS Driver Tieout';
-                var fileHeaderString = "Record Type,Record ID,Document Number,Vendor ID,Message";
-                var fileContentString = '';
-                
-                if(inactiveVendorsOfDrivers && inactiveVendorsOfDrivers.length > 0){
-                    for(var dr=0; dr < inactiveVendorsOfDrivers.length; dr++){                                
-                        var vals = inactiveVendorsOfDrivers[dr].split(':');                  
-                        fileContentString += vals[0] + ',' + vals[1] + ',' + vals[2] + ',' + vals[3] + ',' + vals[4] + "\r\n";                               
-                    }
-                }
-                log.debug('fileContentString', 'FUNC fileContentString1: '+fileContentString);
-
-                if(contents != null && contents.length > 0){
-    
-                    var stringifyValues = JSON.stringify(contents);  
-                    //log.debug('stringifyValues', 'FUNC stringifyValues : '+stringifyValues);
-                 
-                    var cleanString = stringifyValues.replace(/["]/g, '').replace(/\[/g,"").replace(/\]/g,"");
-                    //log.debug('cleanString', 'FUNC cleanString : '+cleanString);
-                    
-                    var arr = cleanString.split(',');
-                    log.debug('arr', 'FUNC arr length: '+arr.length);
-
-                
-                    if(arr.length > 0){
-                        for(var id=0; id < arr.length; id++){                                
-                            var vals = arr[id].split(':');                  
-                            fileContentString += vals[0] + ',' + vals[1] + ',' + vals[2] + ',' + vals[3] + ',' + vals[4] + "\r\n";                               
-                        }
-                    }
-    
-                    log.debug('fileContentString', 'FUNC fileContentString2: '+fileContentString);
-  
-                }
-
-                log.debug('fileContentString', 'FUNC FINAL fileContentString: '+fileContentString);
-   
-                if(fileContentString != ''){
-                    
-                    var fileName = constructFileName(newFileNameString);
-    
-                    var newFileObj = file.create({
-                        name: fileName,
-                        fileType: file.Type.CSV,
-                        contents: fileHeaderString + "\r\n",
-                        folder: folderID
-                    });
-
-                    log.debug('newFileObj', 'FUNC newFileObj: '+newFileObj);
-
-                    
-                    newFileObj.appendLine({ value: fileContentString });
-    
-                    var newFileId = newFileObj.save();
-                    log.debug('Generated ResultFileId: ', newFileId);
-    
-                    if(newFileId){
-                        var configRecObj = config.load({ type: config.Type.COMPANY_PREFERENCES });
-                        var emailFrom = configRecObj.getValue('custscript_error_email_author');
-                        log.debug('emailFrom: ', emailFrom);
-    
-
-                        var loginEmployeName = runtime.getCurrentUser();
-                        log.debug('loginEmployeName: ', loginEmployeName);
-                        
-                        var fileObj = file.load({
-                            id: newFileId
-                        });
-
-                        email.send({
-                            author: emailFrom,
-                            recipients: loginEmployeName.email,
-                            subject: 'ACS Tieout CSV',
-                            body: 'ACS Tieout has been completed and the result file is attached. PFA.',
-                            attachments: [fileObj]
-                        });
-                    } 
-                }
-            }
-            catch(ex){
-                log.debug('csv file func', 'createCSVFIle result: '+JSON.stringify(ex));          
-            }
-        }
-
-        function getInactiveVendorsOfDriverRecords(){
-            try{
-                var driverSubsidiary = FILE_CONST.SCRIPT_PARAM.SUB;
-                var periodID = FILE_CONST.SCRIPT_PARAM.PERIOD;
-
-                var searchType = '';
-                //SEARCH 1
-                var driverSearch = search.load({ id: FILE_CONST.SCRIPT_PARAM.ACS_DRIVER_SEARCH });
-                searchType = 'INACTIV_VEND_DRIVER_SEARCH';
-                var driverSearchResults = getResults(driverSearch, searchType);
-
-                var driverAgentCodes = [];
-                
-                for(var i=0; driverSearchResults && i < driverSearchResults.length; i++){
-                    var recID = driverSearchResults[i].id;
-                    var agentCode = driverSearchResults[i].getValue('custrecord_tlg_acs_agent_code');
-                    driverAgentCodes.push(agentCode);
-                }
-                log.debug('driverAgentCodes', 'FUNC driverAgentCodes: '+driverAgentCodes);
-               
-
-                //SEARCH 2
-                var agentCodesBySection = [];
-                var tranSearch = search.load({ id: FILE_CONST.SCRIPT_PARAM.ACS_PDF_SEC_SUMM_SEARCH });
-                searchType = 'INACTIV_VEND_TRAN_SEARCH';
-                var tranSearchResults = getResults(tranSearch, searchType);
-
-                var stringifyVals = JSON.stringify(tranSearchResults);
-                var cleanStr = stringifyVals.replace(/[()]/g, '');
-                var newObj = JSON.parse(cleanStr);  
-    
-                for(var j=0; tranSearchResults && j < tranSearchResults.length; j++){               
-                    var agentCode = newObj[j].values.GROUPcustcol_agent_ext_id;
-                    
-                    if(agentCodesBySection.indexOf(agentCode) == -1){
-                        agentCodesBySection.push(agentCode);
-                    }
-                }
-
-                //SEARCH 3
-                var commSearch = search.load({ id: FILE_CONST.SCRIPT_PARAM.ACS_SUPP_COMM_SUMM_SEARCH });
-                searchType = 'INACTIV_VEND_COMM_SEARCH';
-                var suppCommSearchResults = getResults(commSearch, searchType);
-
-                var stringifyVals = JSON.stringify(suppCommSearchResults);
-                var cleanStr = stringifyVals.replace(/[()]/g, '');
-                var newObj = JSON.parse(cleanStr);  
-    
-                for(var k=0; suppCommSearchResults && k < suppCommSearchResults.length; k++){
-                    var agentCode = newObj[k].values.GROUPcustrecord_tlg_hotel_comm_agent_code;
-                   
-                    if(agentCodesBySection.indexOf(agentCode) == -1){
-                        agentCodesBySection.push(agentCode);
-                    }
-                }
-                log.debug('agentCodesBySection', 'FUNC agentCodesBySection: '+agentCodesBySection);
-     
-
-                var inactiveAgentCodes = [];
-                for(var i=0; driverSearchResults && i < driverSearchResults.length; i++){
-                    var recID = driverSearchResults[i].id;
-                    var agentCode = driverSearchResults[i].getValue('custrecord_tlg_acs_agent_code');
-                    //var agentID = driverSearchResults[i].getValue('custrecord_tlg_acs_agent_code');
-                    if(agentCodesBySection.indexOf(agentCode) != -1){
-                        inactiveAgentCodes.push('Driver Record' + ':' + recID + ':' + '' + ':' + agentCode + ':' + "Inactive Agent ID-" + agentCode);                                         
-                    }
-                }
-                log.debug('inactiveAgentCodes', 'FUNC inactiveAgentCodes for drivers: '+inactiveAgentCodes);
-               
-                return inactiveAgentCodes;
-            }
-            catch(ex){
-                log.debug('inactive vendors of drivers func', 'inactive vendors of drivers result: '+JSON.stringify(ex));    
-            }
-        }
-    
-    
-        function getResults(searchLoad, searchType){
-            try{
-                var driverSubsidiary = FILE_CONST.SCRIPT_PARAM.SUB;
-                //log.debug('SUBS ID', 'SubsID: '+driverSubsidiary);
-               
-                var periodID = FILE_CONST.SCRIPT_PARAM.PERIOD;
-                //log.debug('periodID', 'PeriodID: '+periodID);
-               
-                var periodName = GetPeriodName(FILE_CONST.SCRIPT_PARAM.PERIOD);
-                //log.debug('periodName', 'PeriodName: '+periodName);
-               
-    
-                if(searchType == 'DRIVER_SEARCH' || searchType == 'INACTIV_VEND_DRIVER_SEARCH'){                
-                    var filters = searchLoad.filters; 
-                    var filterOne = search.createFilter({ 
-                            name: 'custrecord_tlg_acs_agent_subsidiary', operator: 'anyof', values: driverSubsidiary
-                        });
-                    filters.push(filterOne);
-                    var filterTwo = search.createFilter({ 
-                        name: 'custrecord_tlg_acs_period', operator: 'anyof', values: periodID
-                    });
-                    filters.push(filterTwo); 
-
-                    if(searchType == 'INACTIV_VEND_DRIVER_SEARCH'){
-                        var filterThree = search.createFilter({ name: 'isinactive', join: 'custrecord_tlg_acs_agent_id', operator: 'is', values: "T" });
-                        filters.push(filterThree); 
-                    }
-                }
-                else if(searchType == 'ACS_PDF_SEARCH' || searchType == 'INACTIV_VEND_TRAN_SEARCH'){
-                    var filters = searchLoad.filters; 
-                    var filterOne = search.createFilter({ 
-                            name: 'subsidiary', operator: 'anyof', values: driverSubsidiary
-                        });
-                    filters.push(filterOne);
-                    var filterTwo = search.createFilter({ 
-                        name: 'custcol_tlg_acs_number', operator: 'contains', values: periodName
-                    });
-                    filters.push(filterTwo); 
-
-                    if(searchType == 'INACTIV_VEND_TRAN_SEARCH'){
-                        var filterThree = search.createFilter({ name: 'isinactive', join: 'custcol_tlg_agent_id', operator: 'is', values: "T" });
-                        filters.push(filterThree); 
-                    }
-                }
-                else if(searchType == 'SUPP_COMM_SEARCH' || searchType == 'INACTIV_VEND_COMM_SEARCH'){
-                    //log.debug('SUPP_COMM_SEARCH', 'SUPP_COMM_SEARCH: ');
-               
-                    var filters = searchLoad.filters; //reference Search.filters object to a new variable
-                    var filterOne = search.createFilter({ 
-                            name: 'custrecord_tlg_hotel_comm_subsidiary', operator: 'anyof', values: driverSubsidiary
-                        });
-                    filters.push(filterOne);
-                    var filterTwo = search.createFilter({ 
-                        name: 'custrecord_tlg_hotel_comm_acs_number', operator: 'contains', values: periodName
-                    });
-                    filters.push(filterTwo); 
-
-                    if(searchType == 'INACTIV_VEND_COMM_SEARCH'){
-                        var filterThree = search.createFilter({ name: 'isinactive', join: 'custrecordhotel_comm_ch_agentid', operator: 'is', values: "T" });
-                        filters.push(filterThree); 
-                    }
-                }
-    
-    
-                var startIndex = 0;
-                var endIndex = 1000;
-                var result = [];
-                  while (true) {
-                    var result_set = searchLoad.run().getRange({
-                        start: startIndex,
-                        end: endIndex
-                    });
-                    if (result_set.length > 0) {
-                        result = result.concat(result_set);
-                        startIndex = endIndex;
-                        endIndex = startIndex + 1000;
-                    } else {
-                        break;
-                    }
-                }
-    
-                return result;
-    
-            }
-            catch(ex){
-                log.debug('ex', 'ex: '+JSON.stringify(ex));
-            }
-        }
-    
-        function getMissingAgentCodesTransactions(missingAgentCode, driverSubsidiary){
-            try{
-                var periodID = FILE_CONST.SCRIPT_PARAM.PERIOD;
-                log.debug('periodID', 'getMissingAgentCodesTransactions PeriodID: '+periodID);
-
-                //Create search to get transaction of the Missing Agent Code
-                var transactionSearch = search.create({
-                    type: "transaction",
-                    filters:
-                    [
-                        ["type","anyof","VendBill","VendCred","CustCred","CustInvc"], 
-                        "AND", 
-                        ["subsidiary","anyof",driverSubsidiary],
-                        "AND",
-                        ["postingperiod","abs", periodID],
-                        "AND", 
-                        ["custcol_agent_ext_id","is", missingAgentCode],
-                        "AND",                                      
-                        ["amount","notequalto","0.00"]
-                    ],
-                    columns:
-                    [
-                       search.createColumn({name: "entity", label: "Name"}),
-                       search.createColumn({name: "custcol_agent_ext_id", label: "Agent Code"}),
-                       search.createColumn({name: "custcol_tlg_acs_number", label: "ACS Number"}),
-                       search.createColumn({name: "amount", label: "Amount"}),
-                       search.createColumn({name: "custcol_tran_type", label: "Transaction Type"}),
-                       search.createColumn({name: "custbody_tlg_agent_id", label: "Agent ID"}),
-                       search.createColumn({name: "custbody_agent_ext_id", label: "Agent Code"}),
-                       search.createColumn({
-                        name: "isinactive",
-                        join: "CUSTCOL_TLG_AGENT_ID",
-                        label: "Inactive"
-                        }),
-                        search.createColumn({name: "tranid", label: "Document Number"})
-  
-                    ]
-                });
-    
-                var startIndex = 0;
-                var endIndex = 1000;
-                var result = [];
-                  while (true) {
-                    var result_set = transactionSearch.run().getRange({
-                        start: startIndex,
-                        end: endIndex
-                    });
-                    if (result_set.length > 0) {
-                        result = result.concat(result_set);
-                        startIndex = endIndex;
-                        endIndex = startIndex + 1000;
-                    } else {
-                        break;
-                    }
-                }
-                  
-                log.debug('result', 'getMissingAgentCodesTransactions result LENGTH: '+result.length);
-               
-                //log.debug('result', 'getMissingAgentCodesTransactions result: '+JSON.stringify(result));
-               
-                   return result;
-    
-            }
-            catch(ex){
-                log.debug('ex', 'Get Missing Agent Codes Transactions FUNC ex: '+JSON.stringify(ex));
-            }
-        }
-    
-        function checkACSNumberIsNull(results){
-            log.debug('checkACSNumberIsNull', 'FUNC checkACSNumberIsNull: ');
-    
-            var missingACSNumRecIDs = [];
-            for(var a=0; a < results.length; a++){
-                var acsNumber = results[a].getValue({ name: 'custcol_tlg_acs_number' });
-                var recid = results[a].id;
-                var recType = results[a].recordType;
-                var tranID = results[a].getValue({ name: 'tranid' });;
-                var agentID = results[a].getText({ name: 'custbody_tlg_agent_id' });;
-                
-                if(acsNumber == '' || acsNumber == null || acsNumber == undefined){              
-                    missingACSNumRecIDs.push(recType + ':' + recid + ':' + tranID + ':' + agentID + ':' + "ACS Number Missing" + "||");                
-                }
-            }
-    
-            return missingACSNumRecIDs;
-        }
-    
-        function checkInactiveAgents(results){
-            try{
-                log.debug('checkInactiveAgents', 'FUNC checkInactiveAgents');
-    
-                var inactiveAgentTranIDs = [];
-                var tranIDAdded = [];
-                log.debug('results.length', 'FUNC checkInactiveAgents results.length: '+results.length);
-    
-                for(var ven = 0; ven < results.length; ven++){
-                    var tranID = results[ven].id;
-                    var recType = results[ven].recordType;
-                    var isAgentInactive = results[ven].getValue({ name: "isinactive", join: "CUSTCOL_TLG_AGENT_ID" });
-                    var tranNum = results[ven].getValue({ name: 'tranid' });
-                    var agentID = results[ven].getText({ name: 'custbody_tlg_agent_id' });
-                    var agentCode = results[ven].getValue({ name: 'custbody_agent_ext_id' });
-                    //log.debug('isAgentInactive', 'FUNC isAgentInactive: '+isAgentInactive);
-    
-                    if(isAgentInactive != false && tranIDAdded.indexOf(tranID) == -1){
-                        //log.debug('Agent is Inactive');
-    
-                        tranIDAdded.push(tranID);
-                        inactiveAgentTranIDs.push(recType + ':' + tranID + ':' + tranNum + ':' + agentID + ':' + "Inactive Agent ID-" + agentCode);                  
-                        //log.debug('inactiveAgentTranIDs', ' inactiveAgentTranIDs: '+inactiveAgentTranIDs);
-    
-                    }
-                }   
-    
-                log.debug('tranIDAdded', 'tranIDAdded Length: '+tranIDAdded.length);
-    
-                log.debug('tranIDAdded', 'tranIDAdded: '+tranIDAdded);
-    
-                //log.debug('inactiveAgentTranIDs', 'After loop inactiveAgentTranIDs: '+inactiveAgentTranIDs);
-    
-                return inactiveAgentTranIDs;
-            }
-            catch(ex){
-                log.debug('result', 'checkInactiveAgent result: '+JSON.stringify(ex));          
-            }
-        }
-    
-        function checkVoidTransactions(results){
-            try{
-                log.debug('checkVoidTransactions', 'FUNC checkVoidTransactions: ');
-    
-    
-                var nonVoidTranIDs = [];
-                for(var x = 0; x < results.length; x++){
-                    var tranID = results[x].id;
-                    var recType = results[x].recordType;
-                    var tranType = results[x].getText({ name: 'custcol_tran_type' });
-                    var tranNum = results[x].getValue({ name: 'tranid' });;
-                    var agentID = results[x].getText({ name: 'custbody_tlg_agent_id' });;
-                
-                    
-                    if(tranType != 'Void'){
-                        
-                        nonVoidTranIDs.push(recType + ':' + tranID + ':' + tranNum + ':' + agentID + ':' + "Non Void Transaction");
-                       
-                    }
-                }
-    
-                return nonVoidTranIDs;
-            }
-            catch(ex){
-                log.debug('result', 'checkVoidTransactions result: '+JSON.stringify(ex));          
-            }
-        }
-    
-        function constructFileName(fileName) {
-            //var filenameArray = fileName.split(".");
-            var d = new Date();
-            var year = d.getFullYear().toString();
-            var month = d.getMonth();
-            month = (month + 1).toString()
-            var date = d.getDate().toString();
-            var hours = d.getHours().toString();
-            var minutes = d.getMinutes();
-            var seconds = d.getSeconds().toString();
-    
-            var dateString = month + date + year + hours + minutes + seconds;
-    
-            var newFileNameString = fileName + "_" + dateString + ".csv";
-    
-            return newFileNameString;
-        }
-    
-        function GetPeriodName(period){
-            var prdName = search.lookupFields({
-                type: search.Type.ACCOUNTING_PERIOD,
-                id: period,
-                columns: ['periodname']
-            }).periodname;
-            prdName= prdName.toUpperCase();
-            //log.debug('prdName', 'FUNC prdName: '+prdName);
-                
-    
-            var splitVal = prdName.split(' ');
-            var finalPrdName = [];
-            finalPrdName.push(splitVal[0] + '-' + splitVal[1]);
-            //log.debug('finalPrdName', 'FUNC finalPrdName: '+finalPrdName);
-                
-    
-            return finalPrdName;
-        }
-
-        function GetSubName(subID){
-            
-            var subVals = search.lookupFields({
-                type: search.Type.SUBSIDIARY,
-                id: subID,
-                columns: ['name']
-            });
-           
-            
-            var subName = subVals.name; 
-            var splitVal = subName.split(':');
-            var x = splitVal.length - 1;
-            //log.debug('splitVal[x]', 'FUNC splitVal[x]: '+splitVal[x]);
-            
-            var splitVal2 = splitVal[x].split(' ');
-            //log.debug('splitVal2', 'FUNC splitVal2: '+splitVal2);
-            
-            var finalSubName = splitVal2[1];
-
-            //log.debug('finalSubName', 'FUNC finalSubName: '+finalSubName);
-            
-            return finalSubName;
-        }
-    
-    
-        return {
-            getInputData: GetInputData,
-            map: Map,
-            reduce: Reduce,
-            summarize: Summarize
+    var PARAMS = {
+        DRIVER_SEARCH: script.getParameter('custscript_acs_driver_search'),
+        PDF_SEARCH: script.getParameter('custscript_acs_pdf_sec_summ_search'),
+        COMM_SEARCH: script.getParameter('custscript_acs_supp_comm_summary_srch'),
+        PERIOD: script.getParameter('custscript_tlg_mr_driver_prd'),
+        SUB: script.getParameter('custscript_tlg_mr_driver_subs'),
+        FOLDER: script.getParameter('custscript_itg_folder_id')
     };
-    });
+
+    /* ================= CACHE ================= */
+
+    var CACHE = {
+        DRIVER: null,
+        PDF: null,
+        COMM: null,
+        INACTIVE_DRIVERS: null
+    };
+
+    /* ================= UTIL ================= */
+
+    function runSearchPaged(searchObj) {
+        var data = [];
+        var paged = searchObj.runPaged({ pageSize: 1000 });
+        paged.pageRanges.forEach(function (range) {
+            var page = paged.fetch({ index: range.index });
+            data = data.concat(page.data);
+        });
+        return data;
+    }
+
+    /* ================= INPUT ================= */
+
+    function getInputData() {
+
+        var driverResults = getDriverSearch();
+        var driverAgentCodes = driverResults.map(function (r) {
+            return r.getValue('custrecord_tlg_acs_agent_code');
+        });
+
+        var agentCodes = getPDFAgents().concat(getCommAgents())
+            .filter(function (v, i, a) { return a.indexOf(v) === i; });
+
+        return agentCodes.filter(function (code) {
+            return driverAgentCodes.indexOf(code) === -1;
+        });
+    }
+
+    function map(context) {
+        context.write(context.key, context.value);
+    }
+
+    /* ================= REDUCE ================= */
+
+    function reduce(context) {
+
+        var missingAgentCode = context.values[0];
+        if (!missingAgentCode) return;
+
+        var results = getTransactions(missingAgentCode);
+        var output = [];
+
+        output = output.concat(checkACSNumberMissing(results));
+        output = output.concat(checkInactiveAgents(results));
+        output = output.concat(checkNonVoidTransactions(results));
+
+        if (output.length) {
+            context.write('RESULT', output.join(','));
+        }
+    }
+
+    /* ================= SUMMARY ================= */
+
+    function summarize(summary) {
+
+        var rows = [];
+
+        summary.output.iterator().each(function (_, value) {
+            rows = rows.concat(value.split(','));
+            return true;
+        });
+
+        rows = rows.concat(getInactiveDrivers());
+        if (!rows.length) return;
+
+        var csv = "Record Type,Record ID,Document Number,Vendor ID,Message\n";
+
+        rows.forEach(function (r) {
+            var v = r.split(':');
+            csv += v[0] + ',' + v[1] + ',' + v[2] + ',' + v[3] + ',' + v[4] + '\n';
+        });
+
+        var fileObj = file.create({
+            name: 'ACS_Driver_Tieout_' + Date.now() + '.csv',
+            fileType: file.Type.CSV,
+            contents: csv,
+            folder: PARAMS.FOLDER
+        });
+
+        var fileId = fileObj.save();
+        var configRec = config.load({ type: config.Type.COMPANY_PREFERENCES });
+
+        email.send({
+            author: configRec.getValue('custscript_error_email_author'),
+            recipients: runtime.getCurrentUser().email,
+            subject: 'ACS Tieout Completed',
+            body: 'ACS Tieout has been completed and the result file is attached.',
+            attachments: [file.load({ id: fileId })]
+        });
+    }
+
+    /* ================= SEARCH HELPERS ================= */
+
+    function getTransactions(agentCode) {
+
+        return runSearchPaged(search.create({
+            type: 'transaction',
+            filters: [
+                ['type', 'anyof', 'VendBill', 'VendCred', 'CustCred', 'CustInvc'],
+                'AND', ['custcol_agent_ext_id', 'is', agentCode],
+                'AND', ['subsidiary', 'anyof', PARAMS.SUB],
+                'AND', ['postingperiod', 'anyof', PARAMS.PERIOD],
+                'AND', ['amount', 'notequalto', '0.00']
+            ],
+            columns: [
+                'tranid',
+                'custcol_tlg_acs_number',
+                'custcol_tran_type',
+                search.createColumn({ name: 'custbody_tlg_agent_id' }),
+                search.createColumn({ name: 'custbody_agent_ext_id' }),
+                search.createColumn({ name: 'isinactive', join: 'custcol_tlg_agent_id' })
+            ]
+        }));
+    }
+
+    /* ================= VALIDATIONS (LEGACY) ================= */
+
+    // CHECK 1 – ACS Number Missing
+    function checkACSNumberMissing(results) {
+
+        var rows = [];
+
+        results.forEach(function (r) {
+            var acs = r.getValue('custcol_tlg_acs_number');
+            if (acs) return;
+
+            rows.push(
+                r.recordType + ':' +
+                r.id + ':' +
+                r.getValue('tranid') + ':' +
+                r.getText('custbody_tlg_agent_id') + ':' +
+                'ACS Number Missing'
+            );
+        });
+
+        return rows;
+    }
+
+    // CHECK 2 – Inactive Agent
+    function checkInactiveAgents(results) {
+
+        var rows = [];
+        var addedTranIds = [];
+
+        results.forEach(function (r) {
+
+            var inactive = r.getValue({ name: 'isinactive', join: 'custcol_tlg_agent_id' });
+            if (inactive !== true) return;
+
+            if (addedTranIds.indexOf(r.id) !== -1) return;
+            addedTranIds.push(r.id);
+
+            rows.push(
+                r.recordType + ':' +
+                r.id + ':' +
+                r.getValue('tranid') + ':' +
+                r.getText('custbody_tlg_agent_id') + ':' +
+                'Inactive Agent ID-' + r.getValue('custbody_agent_ext_id')
+            );
+        });
+
+        return rows;
+    }
+
+    // CHECK 3 – Non-Void Transaction
+    function checkNonVoidTransactions(results) {
+
+        var rows = [];
+
+        results.forEach(function (r) {
+            var tranType = r.getText('custcol_tran_type');
+            if (tranType === 'Void') return;
+
+            rows.push(
+                r.recordType + ':' +
+                r.id + ':' +
+                r.getValue('tranid') + ':' +
+                r.getText('custbody_tlg_agent_id') + ':' +
+                'Non Void Transaction'
+            );
+        });
+
+        return rows;
+    }
+
+    /* ================= INACTIVE DRIVER RECORDS ================= */
+
+    function getInactiveDrivers() {
+
+        if (CACHE.INACTIVE_DRIVERS) return CACHE.INACTIVE_DRIVERS;
+
+        var s = search.load({ id: PARAMS.DRIVER_SEARCH });
+        s.filters.push(search.createFilter({
+            name: 'isinactive',
+            join: 'custrecord_tlg_acs_agent_id',
+            operator: 'is',
+            values: 'T'
+        }));
+
+        CACHE.INACTIVE_DRIVERS = runSearchPaged(s).map(function (r) {
+            var agentCode = r.getValue('custrecord_tlg_acs_agent_code');
+            return 'Driver Record:' +
+                   r.id + ':' +
+                   '' + ':' +
+                   agentCode + ':' +
+                   'Inactive Agent ID-' + agentCode;
+        });
+
+        return CACHE.INACTIVE_DRIVERS;
+    }
+
+    /* ================= DRIVER / PDF / COMM ================= */
+
+    function getDriverSearch() {
+        if (CACHE.DRIVER) return CACHE.DRIVER;
+
+        var s = search.load({ id: PARAMS.DRIVER_SEARCH });
+        s.filters.push(
+            search.createFilter({ name: 'custrecord_tlg_acs_agent_subsidiary', operator: 'anyof', values: PARAMS.SUB }),
+            search.createFilter({ name: 'custrecord_tlg_acs_period', operator: 'anyof', values: PARAMS.PERIOD })
+        );
+
+        CACHE.DRIVER = runSearchPaged(s);
+        return CACHE.DRIVER;
+    }
+
+    function getPDFAgents() {
+        if (CACHE.PDF) return CACHE.PDF;
+
+        var s = search.load({ id: PARAMS.PDF_SEARCH });
+        s.filters.push(
+            search.createFilter({ name: 'subsidiary', operator: 'anyof', values: PARAMS.SUB }),
+            search.createFilter({ name: 'postingperiod', operator: 'anyof', values: PARAMS.PERIOD })
+        );
+
+        CACHE.PDF = runSearchPaged(s).map(function (r) {
+            return r.getValue({ name: 'custcol_agent_ext_id', summary: search.Summary.GROUP });
+        });
+
+        return CACHE.PDF;
+    }
+
+    function getCommAgents() {
+        if (CACHE.COMM) return CACHE.COMM;
+
+        var s = search.load({ id: PARAMS.COMM_SEARCH });
+        s.filters.push(
+            search.createFilter({ name: 'custrecord_tlg_hotel_comm_subsidiary', operator: 'anyof', values: PARAMS.SUB }),
+            search.createFilter({ name: 'custrecord_tlg_hotel_comm_period', operator: 'anyof', values: PARAMS.PERIOD })
+        );
+
+        CACHE.COMM = runSearchPaged(s).map(function (r) {
+            return r.getValue({ name: 'custrecord_tlg_hotel_comm_agent_code', summary: search.Summary.GROUP });
+        });
+
+        return CACHE.COMM;
+    }
+
+    return {
+        getInputData: getInputData,
+        map: map,
+        reduce: reduce,
+        summarize: summarize
+    };
+});

@@ -1,4 +1,28 @@
-Record Type	Record ID	Document Number	Vendor ID	Message
-invoice	59278718	INV601-174992614	VEN100292620 PAULA MARK	Inactive Agent ID-E1Z0ME
-invoice	59297746	INV601-174996886	VEN100292551 Dorothy Stirling	Non Void Transaction
+function reduce(context) {
 
+    var agentCode = context.values[0];
+    if (!agentCode) return;
+
+    var results = getTransactions(agentCode);
+    var rows = [];
+
+    var inactiveRows = checkInactiveAgents(results);
+    if (inactiveRows.length) {
+        rows = inactiveRows;
+    } else {
+        var acsRows = checkMissingACS(results);
+        if (acsRows.length) {
+            rows = acsRows;
+        } else {
+            var nonVoidRows = checkNonVoid(results);
+            if (nonVoidRows.length) {
+                // ⚠️ match old behavior: take ONLY FIRST row
+                rows = [nonVoidRows[0]];
+            }
+        }
+    }
+
+    if (rows.length) {
+        context.write('ROWS', rows.join('|'));
+    }
+}

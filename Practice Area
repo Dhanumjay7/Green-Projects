@@ -4,25 +4,48 @@ function reduce(context) {
     if (!agentCode) return;
 
     var results = getTransactions(agentCode);
-    var rows = [];
+    if (!results || !results.length) return;
 
-    var inactiveRows = checkInactiveAgents(results);
-    if (inactiveRows.length) {
-        rows = inactiveRows;
-    } else {
-        var acsRows = checkMissingACS(results);
-        if (acsRows.length) {
-            rows = acsRows;
-        } else {
-            var nonVoidRows = checkNonVoid(results);
-            if (nonVoidRows.length) {
-                // ⚠️ match old behavior: take ONLY FIRST row
-                rows = [nonVoidRows[0]];
+    var row = null;
+
+    // 1️⃣ Highest priority – Inactive Agent
+    for (var i = 0; i < results.length; i++) {
+        if (results[i].getValue({ name: 'isinactive', join: 'custcol_tlg_agent_id' }) === true) {
+            row =
+                results[i].recordType + ':' +
+                results[i].id + ':' +
+                results[i].getValue('tranid') + ':' +
+                results[i].getText('entity') + ':' +
+                'Inactive Agent ID-' + agentCode;
+            break;
+        }
+    }
+
+    // 2️⃣ ACS Missing
+    if (!row) {
+        for (var j = 0; j < results.length; j++) {
+            if (!results[j].getValue('custcol_tlg_acs_number')) {
+                row =
+                    results[j].recordType + ':' +
+                    results[j].id + ':' +
+                    results[j].getValue('tranid') + ':' +
+                    results[j].getText('entity') + ':' +
+                    'ACS Number Missing';
+                break;
             }
         }
     }
 
-    if (rows.length) {
-        context.write('ROWS', rows.join('|'));
+    // 3️⃣ Non-Void (last priority)
+    if (!row) {
+        row =
+            results[0].recordType + ':' +
+            results[0].id + ':' +
+            results[0].getValue('tranid') + ':' +
+            results[0].getText('entity') + ':' +
+            'Non Void Transaction';
     }
+
+    // ✅ Write EXACTLY ONE row
+    context.write('ROWS', row);
 }

@@ -1,18 +1,4 @@
-var inactiveAgents = getInactiveAgentsFromPDFAndCOMM();
+Record Type	Record ID	Document Number	Vendor ID	Message
+invoice	59278718	INV601-174992614	VEN100292620 PAULA MARK	Inactive Agent ID-E1Z0ME
+invoice	59297746	INV601-174996886	VEN100292551 Dorothy Stirling	Non Void Transaction
 
-if (inactiveAgents.indexOf(agentCode) !== -1) {
-    rows = rows.concat(markAllAsInactive(results, agentCode));
-} else {
-    rows = rows.concat(checkMissingACS(results));
-    rows = rows.concat(checkNonVoid(results));
-}
-
-function markAllAsInactive(results, agentCode) {
-    return results.map(function (r) {
-        return r.recordType + ':' +
-               r.id + ':' +
-               r.getValue('tranid') + ':' +
-               r.getText('entity') + ':' +
-               'Inactive Agent ID-' + agentCode;
-    });
-}

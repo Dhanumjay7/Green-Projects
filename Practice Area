@@ -1,3 +1,64 @@
+function getInactiveVendorsOfDriverRecords() {
+
+    // Step 1: get all driver records
+    var drivers = getDriverSearch(); // cached
+    var driverAgentMap = {};
+
+    drivers.forEach(function (r) {
+        driverAgentMap[r.getValue('custrecord_tlg_acs_agent_code')] = r.id;
+    });
+
+    // Step 2: collect inactive agent codes from PDF
+    var inactiveAgents = [];
+
+    runSearchPaged(search.load({ id: PARAMS.PDF_SEARCH })
+        .filters.push(
+            search.createFilter({ name: 'subsidiary', operator: 'anyof', values: PARAMS.SUB }),
+            search.createFilter({ name: 'postingperiod', operator: 'anyof', values: PARAMS.PERIOD }),
+            search.createFilter({ name: 'isinactive', join: 'custcol_tlg_agent_id', operator: 'is', values: 'T' })
+        )
+    ).forEach(function (r) {
+        inactiveAgents.push(
+            r.getValue({ name: 'custcol_agent_ext_id', summary: search.Summary.GROUP })
+        );
+    });
+
+    // Step 3: collect inactive agent codes from COMM
+    runSearchPaged(search.load({ id: PARAMS.COMM_SEARCH })
+        .filters.push(
+            search.createFilter({ name: 'custrecord_tlg_hotel_comm_subsidiary', operator: 'anyof', values: PARAMS.SUB }),
+            search.createFilter({ name: 'custrecord_tlg_hotel_comm_period', operator: 'anyof', values: PARAMS.PERIOD }),
+            search.createFilter({ name: 'isinactive', join: 'custrecordhotel_comm_ch_agentid', operator: 'is', values: 'T' })
+        )
+    ).forEach(function (r) {
+        inactiveAgents.push(
+            r.getValue({ name: 'custrecord_tlg_hotel_comm_agent_code', summary: search.Summary.GROUP })
+        );
+    });
+
+    // Step 4: de-duplicate
+    inactiveAgents = inactiveAgents.filter(function (v, i, a) {
+        return a.indexOf(v) === i;
+    });
+
+    // Step 5: map back to Driver records (LEGACY output)
+    var rows = [];
+    inactiveAgents.forEach(function (agentCode) {
+        if (driverAgentMap[agentCode]) {
+            rows.push(
+                'Driver Record:' +
+                driverAgentMap[agentCode] + ':' +
+                '' + ':' +
+                agentCode + ':' +
+                'Inactive Agent ID-' + agentCode
+            );
+        }
+    });
+
+    return rows;
+}
+
+
 function summarize(summary) {
 
     var rows = [];
@@ -6,6 +67,9 @@ function summarize(summary) {
         rows = rows.concat(value.split(','));
         return true;
     });
+
+    // 🔹 Driver-level inactive vendors (PDF + COMM + Driver comparison)
+    rows = rows.concat(getInactiveVendorsOfDriverRecords());
 
     if (!rows.length) return;
 
@@ -35,3 +99,4 @@ function summarize(summary) {
         attachments: [file.load({ id: fileId })]
     });
 }
+

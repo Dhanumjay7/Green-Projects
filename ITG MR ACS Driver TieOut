@@ -98,24 +98,28 @@ define(['N/search', 'N/config', 'N/runtime', 'N/email', 'N/file'],
 
         //summarize function
 
+
         function summarize(summary) {
 
             var rows = [];
+
             summary.output.iterator().each(function (_, value) {
                 rows = rows.concat(value.split(','));
                 return true;
             });
 
-            rows = rows.concat(getInactiveDrivers());
-            log.debug('Total Issues Found', rows.length);
-            log.debug('Rows', rows);
+            // 🔹 Driver-level inactive vendors (PDF + COMM + Driver comparison)
+            rows = rows.concat(getInactiveVendorsOfDriverRecords());
 
             if (!rows.length) return;
 
-            var csv = "Record Type,Record ID,Document Number,Vendor ID,Message\n" +
-                rows.map(function (r) {
-                    return r.split(':').join(',');
-                }).join('\n');
+            var csv = "Record Type,Record ID,Document Number,Vendor ID,Message\n";
+
+            rows.forEach(function (r) {
+                var v = r.split(':');
+                csv += v[0] + ',' + v[1] + ',' + v[2] + ',' + v[3] + ',' + v[4] + '\n';
+            });
+
             var driverSubsidiary = PARAMS.SUB;
 
             var subName = GetSubName(driverSubsidiary);
@@ -284,28 +288,66 @@ define(['N/search', 'N/config', 'N/runtime', 'N/email', 'N/file'],
                     ':' + r.getText('custbody_agent_ext_id') + ':Non Void Transaction';
             });
         }
+        function getInactiveVendorsOfDriverRecords() {
 
-        function getInactiveDrivers() {
+            // Step 1: get all driver records
+            var drivers = getDriverSearch(); // cached
+            var driverAgentMap = {};
 
-            if (CACHE.INACTIVE_DRIVERS) return CACHE.INACTIVE_DRIVERS;
-           
-            var s = search.load({ id: PARAMS.DRIVER_SEARCH });
-            s.filters.push(
-                search.createFilter({ name: 'isinactive', join: 'custrecord_tlg_acs_agent_id', operator: 'is', values: 'T' }),
-
-                search.createFilter({ name: 'custrecord_tlg_acs_agent_subsidiary', operator: 'anyof', values: PARAMS.SUB }),
-                search.createFilter({ name: 'custrecord_tlg_acs_period', operator: 'anyof', values: PARAMS.PERIOD })
-
-            );
-
-            CACHE.INACTIVE_DRIVERS = runSearchPaged(s).map(function (r) {
-
-                return 'Driver Record:' + r.id + '::' +
-                    r.getValue('custrecord_tlg_acs_agent_code') + "Inactive Agent ID-" + r.getValue('custrecord_tlg_acs_agent_code');
+            drivers.forEach(function (r) {
+                driverAgentMap[r.getValue('custrecord_tlg_acs_agent_code')] = r.id;
             });
 
-            return CACHE.INACTIVE_DRIVERS;
+            // collect inactive agent codes from PDF
+            var inactiveAgents = [];
+
+            runSearchPaged(search.load({ id: PARAMS.PDF_SEARCH })
+                .filters.push(
+                    search.createFilter({ name: 'subsidiary', operator: 'anyof', values: PARAMS.SUB }),
+                    search.createFilter({ name: 'postingperiod', operator: 'anyof', values: PARAMS.PERIOD }),
+                    search.createFilter({ name: 'isinactive', join: 'custcol_tlg_agent_id', operator: 'is', values: 'T' })
+                )
+            ).forEach(function (r) {
+                inactiveAgents.push(
+                    r.getValue({ name: 'custcol_agent_ext_id', summary: search.Summary.GROUP })
+                );
+            });
+
+            // collect inactive agent codes from COMM
+            runSearchPaged(search.load({ id: PARAMS.COMM_SEARCH })
+                .filters.push(
+                    search.createFilter({ name: 'custrecord_tlg_hotel_comm_subsidiary', operator: 'anyof', values: PARAMS.SUB }),
+                    search.createFilter({ name: 'custrecord_tlg_hotel_comm_period', operator: 'anyof', values: PARAMS.PERIOD }),
+                    search.createFilter({ name: 'isinactive', join: 'custrecordhotel_comm_ch_agentid', operator: 'is', values: 'T' })
+                )
+            ).forEach(function (r) {
+                inactiveAgents.push(
+                    r.getValue({ name: 'custrecord_tlg_hotel_comm_agent_code', summary: search.Summary.GROUP })
+                );
+            });
+
+            // arrage unique inactive agents
+            inactiveAgents = inactiveAgents.filter(function (v, i, a) {
+                return a.indexOf(v) === i;
+            });
+
+            //  map back to Driver records)
+            var rows = [];
+            inactiveAgents.forEach(function (agentCode) {
+                if (driverAgentMap[agentCode]) {
+                    rows.push(
+                        'Driver Record:' +
+                        driverAgentMap[agentCode] + ':' +
+                        '' + ':' +
+                        agentCode + ':' +
+                        'Inactive Agent ID-' + agentCode
+                    );
+                }
+            });
+
+            return rows;
         }
+
 
         return {
             getInputData: getInputData,

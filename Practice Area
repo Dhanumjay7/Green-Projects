@@ -1,83 +1,18 @@
-function getInactiveVendorsOfDriverRecords() {
+var inactiveAgents = getInactiveAgentsFromPDFAndCOMM();
 
-    // Step 1: get all driver records (cached)
-    var drivers = getDriverSearch();
-    var driverAgentMap = {};
+if (inactiveAgents.indexOf(agentCode) !== -1) {
+    rows = rows.concat(markAllAsInactive(results, agentCode));
+} else {
+    rows = rows.concat(checkMissingACS(results));
+    rows = rows.concat(checkNonVoid(results));
+}
 
-    drivers.forEach(function (r) {
-        driverAgentMap[r.getValue('custrecord_tlg_acs_agent_code')] = r.id;
+function markAllAsInactive(results, agentCode) {
+    return results.map(function (r) {
+        return r.recordType + ':' +
+               r.id + ':' +
+               r.getValue('tranid') + ':' +
+               r.getText('entity') + ':' +
+               'Inactive Agent ID-' + agentCode;
     });
-
-    var inactiveAgents = [];
-
-    // ---------------- PDF SEARCH ----------------
-    var pdfSearch = search.load({ id: PARAMS.PDF_SEARCH });
-    pdfSearch.filters.push(
-        search.createFilter({ name: 'subsidiary', operator: 'anyof', values: PARAMS.SUB }),
-        search.createFilter({ name: 'postingperiod', operator: 'anyof', values: PARAMS.PERIOD }),
-        search.createFilter({
-            name: 'isinactive',
-            join: 'custcol_tlg_agent_id',
-            operator: 'is',
-            values: 'T'
-        })
-    );
-
-    runSearchPaged(pdfSearch).forEach(function (r) {
-        var agentCode = r.getValue({
-            name: 'custcol_agent_ext_id',
-            summary: search.Summary.GROUP
-        });
-        if (agentCode) inactiveAgents.push(agentCode);
-    });
-
-    // ---------------- COMM SEARCH ----------------
-    var commSearch = search.load({ id: PARAMS.COMM_SEARCH });
-    commSearch.filters.push(
-        search.createFilter({
-            name: 'custrecord_tlg_hotel_comm_subsidiary',
-            operator: 'anyof',
-            values: PARAMS.SUB
-        }),
-        search.createFilter({
-            name: 'custrecord_tlg_hotel_comm_period',
-            operator: 'anyof',
-            values: PARAMS.PERIOD
-        }),
-        search.createFilter({
-            name: 'isinactive',
-            join: 'custrecordhotel_comm_ch_agentid',
-            operator: 'is',
-            values: 'T'
-        })
-    );
-
-    runSearchPaged(commSearch).forEach(function (r) {
-        var agentCode = r.getValue({
-            name: 'custrecord_tlg_hotel_comm_agent_code',
-            summary: search.Summary.GROUP
-        });
-        if (agentCode) inactiveAgents.push(agentCode);
-    });
-
-    // ---------------- De-duplicate ----------------
-    inactiveAgents = inactiveAgents.filter(function (v, i, a) {
-        return a.indexOf(v) === i;
-    });
-
-    // ---------------- Map back to Driver records ----------------
-    var rows = [];
-    inactiveAgents.forEach(function (agentCode) {
-        if (driverAgentMap[agentCode]) {
-            rows.push(
-                'Driver Record:' +
-                driverAgentMap[agentCode] + ':' +
-                '' + ':' +
-                agentCode + ':' +
-                'Inactive Agent ID-' + agentCode
-            );
-        }
-    });
-
-    return rows;
 }

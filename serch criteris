@@ -6,20 +6,27 @@
 define(['N/search', 'N/record', 'N/log'], (search, record, log) => {
 
     const SAVED_SEARCH_ID = 'customsearch1770029147263';
+
     const getInputData = () => {
-        return search.load({
-            id: SAVED_SEARCH_ID
-        });
+        return search.load({ id: SAVED_SEARCH_ID });
     };
+
     const map = (context) => {
         try {
             const result = JSON.parse(context.value);
 
-            const invoiceId = result.id;
+            // ✅ Correct invoice internal id from GROUP column
+            const invoiceId =
+                result.values['GROUP(internalid)'].value;
 
-            const lineCount = Number(
-                result.values['COUNT(line)']
-            );
+            // ✅ Correct COUNT(line)
+            const lineCount =
+                Number(result.values['COUNT(line)']);
+
+            log.audit('Map Result', {
+                invoiceId,
+                lineCount
+            });
 
             if (lineCount > 1) {
                 context.write({
@@ -32,24 +39,26 @@ define(['N/search', 'N/record', 'N/log'], (search, record, log) => {
             log.error('Map Error', e);
         }
     };
+
     const reduce = (context) => {
         try {
             const invoiceId = context.key;
+
+            log.audit('Deleting Invoice', {
+                invoiceId,
+                lineCount: context.values[0]
+            });
 
             record.delete({
                 type: record.Type.INVOICE,
                 id: invoiceId
             });
 
-            log.audit('Invoice Deleted', {
-                invoiceId: invoiceId,
-                lineCount: context.values[0]
-            });
-
         } catch (e) {
-            log.error(`Delete failed for Invoice ${context.key}`, e);
+            log.error(`Delete failed for invoice ${context.key}`, e);
         }
     };
+
     const summarize = (summary) => {
         log.audit('Summary', {
             usage: summary.usage,
@@ -68,10 +77,5 @@ define(['N/search', 'N/record', 'N/log'], (search, record, log) => {
         });
     };
 
-    return {
-        getInputData,
-        map,
-        reduce,
-        summarize
-    };
+    return { getInputData, map, reduce, summarize };
 });

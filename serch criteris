@@ -1,72 +1,77 @@
-/** @NApiVersion 2.1 */
-const invoiceSearchObj = search.create({
-   type: "invoice",
-   settings:[{"name":"consolidationtype","value":"ACCTTYPE"},{"name":"includeperiodendtransactions","value":"F"}],
-   filters:
-   [
-      ["type","anyof","CustInvc"], 
-      "AND", 
-      ["subsidiary","anyof","268"], 
-      "AND", 
-      ["taxline","is","F"], 
-      "AND", 
-      ["item","noneof","@NONE@"], 
-      "AND", 
-      ["shipping","is","F"]
-   ],
-   columns:
-   [
-      search.createColumn({
-         name: "internalid",
-         summary: "GROUP",
-         label: "Internal ID"
-      }),
-      search.createColumn({
-         name: "tranid",
-         summary: "GROUP",
-         label: "Document Number"
-      }),
-      search.createColumn({
-         name: "custbody_agresso_invoice_number",
-         summary: "GROUP",
-         label: "Agresso Invoice Number"
-      }),
-      search.createColumn({
-         name: "custbody_gds_invoice_id",
-         summary: "GROUP",
-         label: "GDS Invoice ID"
-      }),
-      search.createColumn({
-         name: "entity",
-         summary: "GROUP",
-         label: "Name"
-      }),
-      search.createColumn({
-         name: "custcol_invoice_detail_id",
-         summary: "GROUP",
-         label: "Invoice Detail ID"
-      }),
-      search.createColumn({
-         name: "custcol_tran_type",
-         summary: "GROUP",
-         label: "Transaction Type"
-      }),
-      search.createColumn({
-         name: "line",
-         summary: "COUNT",
-         label: "Line ID"
-      })
-   ]
-});
-const searchResultCount = invoiceSearchObj.runPaged().count;
-log.debug("invoiceSearchObj result count",searchResultCount);
-invoiceSearchObj.run().each(function(result){
-   // .run().each has a limit of 4,000 results
-   return true;
-});
+/**
+ * @NApiVersion 2.1
+ * @NScriptType MapReduceScript
+ */
 
-/*
-invoiceSearchObj.id="customsearch1770029147263";
-invoiceSearchObj.title="GT UK Invoices with Duplicate Line and Blank DetailId (copy)";
-const newSearchId = invoiceSearchObj.save();
-*/
+define(['N/search', 'N/record', 'N/log'], (search, record, log) => {
+
+    const SAVED_SEARCH_ID = 'customsearch1770029147263';
+    const getInputData = () => {
+        return search.load({
+            id: SAVED_SEARCH_ID
+        });
+    };
+    const map = (context) => {
+        try {
+            const result = JSON.parse(context.value);
+
+            const invoiceId = result.id;
+
+            const lineCount = Number(
+                result.values['COUNT(line)']
+            );
+
+            if (lineCount > 1) {
+                context.write({
+                    key: invoiceId,
+                    value: lineCount
+                });
+            }
+
+        } catch (e) {
+            log.error('Map Error', e);
+        }
+    };
+    const reduce = (context) => {
+        try {
+            const invoiceId = context.key;
+
+            record.delete({
+                type: record.Type.INVOICE,
+                id: invoiceId
+            });
+
+            log.audit('Invoice Deleted', {
+                invoiceId: invoiceId,
+                lineCount: context.values[0]
+            });
+
+        } catch (e) {
+            log.error(`Delete failed for Invoice ${context.key}`, e);
+        }
+    };
+    const summarize = (summary) => {
+        log.audit('Summary', {
+            usage: summary.usage,
+            concurrency: summary.concurrency,
+            yields: summary.yields
+        });
+
+        summary.mapSummary.errors.iterator().each((key, error) => {
+            log.error('Map Error: ' + key, error);
+            return true;
+        });
+
+        summary.reduceSummary.errors.iterator().each((key, error) => {
+            log.error('Reduce Error: ' + key, error);
+            return true;
+        });
+    };
+
+    return {
+        getInputData,
+        map,
+        reduce,
+        summarize
+    };
+});

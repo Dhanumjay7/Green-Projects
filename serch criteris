@@ -1,81 +1,13 @@
-/**
- * @NApiVersion 2.1
- * @NScriptType MapReduceScript
- */
+Void in subsequent period when previous period is still open
 
-define(['N/search', 'N/record', 'N/log'], (search, record, log) => {
+We ran into an issue and wanted to make sure we understood if there is any way to stop something like this from happening.
 
-    const SAVED_SEARCH_ID = 'customsearch1770029147263';
+We had an invoice that was created in Travcom on 6/6/25. This created the invoice below for $104k.
 
-    const getInputData = () => {
-        return search.load({ id: SAVED_SEARCH_ID });
-    };
+INV601-175490332
 
-    const map = (context) => {
-        try {
-            const result = JSON.parse(context.value);
+There was and adjustment in Travcom on 7/8/25 to change the agent. There should be no actual financial impact of this change. When it transferred to Netsuite, it had both an /invoice and a credit memo component. As June was still open, it added the invoice component to the existing invoice, so recorded an additional $104k of revenue in June. It created a new credit memo (below) dated 7/8/25, which posted to July for a reduction in revenue of $104k. The result was that June's revenue was too high by $104k, and July's was to low by $104k, which month to month in that account is a $204k swing.
 
-            // ✅ Correct invoice internal id from GROUP column
-            const invoiceId =
-                result.values['GROUP(internalid)'].value;
+CM601-0167979
 
-            // ✅ Correct COUNT(line)
-            const lineCount =
-                Number(result.values['COUNT(line)']);
-
-            log.audit('Map Result', {
-                invoiceId,
-                lineCount
-            });
-
-            if (lineCount > 1) {
-                context.write({
-                    key: invoiceId,
-                    value: lineCount
-                });
-            }
-
-        } catch (e) {
-            log.error('Map Error', e);
-        }
-    };
-
-    const reduce = (context) => {
-        try {
-            const invoiceId = context.key;
-
-            log.audit('Deleting Invoice', {
-                invoiceId,
-                lineCount: context.values[0]
-            });
-
-            record.delete({
-                type: record.Type.INVOICE,
-                id: invoiceId
-            });
-
-        } catch (e) {
-            log.error(`Delete failed for invoice ${context.key}`, e);
-        }
-    };
-
-    const summarize = (summary) => {
-        log.audit('Summary', {
-            usage: summary.usage,
-            concurrency: summary.concurrency,
-            yields: summary.yields
-        });
-
-        summary.mapSummary.errors.iterator().each((key, error) => {
-            log.error('Map Error: ' + key, error);
-            return true;
-        });
-
-        summary.reduceSummary.errors.iterator().each((key, error) => {
-            log.error('Reduce Error: ' + key, error);
-            return true;
-        });
-    };
-
-    return { getInputData, map, reduce, summarize };
-});
+Is there any way to stop this from happening? That created quite an issue this month, and unless I get very much more granular in my overall review, we don't currently have an easy way to catch it.

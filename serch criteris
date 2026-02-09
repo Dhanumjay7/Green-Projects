@@ -10,3 +10,4 @@ As of findings about void Void in subsequent period when previous period is stil
 Note :  Invoice is created with two line items with different batch ids, so i thibk i need to check with micheal once in boome those batch ids avialble from  the trave come,so that we can find out thte issue.
 
 As of my compilation :  am integration bevauior is mismatched, because if any travcome invoice is updated then it should update in the netsuite without adding any line items it should change agent id but intste of that one line aitem is added with different batch id with same 104k amount.
+

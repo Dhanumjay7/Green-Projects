@@ -1,13 +1,12 @@
-Void in subsequent period when previous period is still open
+Hi Prabhat,
 
-We ran into an issue and wanted to make sure we understood if there is any way to stop something like this from happening.
+As of findings about void Void in subsequent period when previous period is still open:
 
-We had an invoice that was created in Travcom on 6/6/25. This created the invoice below for $104k.
+1.invoice posted correctly in June. 
+2.In July, there was an agent-only update that shouldn’t have affected money, but the integration resent it as a financial change.
+3.Since June was still open, NetSuite added revenue again in June and posted the offset in July. 
+4.So June looked too high and July too low, even though nothing really changed.
 
-INV601-175490332
+Note :  Invoice is created with two line items with different batch ids, so i thibk i need to check with micheal once in boome those batch ids avialble from  the trave come,so that we can find out thte issue.
 
-There was and adjustment in Travcom on 7/8/25 to change the agent. There should be no actual financial impact of this change. When it transferred to Netsuite, it had both an /invoice and a credit memo component. As June was still open, it added the invoice component to the existing invoice, so recorded an additional $104k of revenue in June. It created a new credit memo (below) dated 7/8/25, which posted to July for a reduction in revenue of $104k. The result was that June's revenue was too high by $104k, and July's was to low by $104k, which month to month in that account is a $204k swing.
-
-CM601-0167979
-
-Is there any way to stop this from happening? That created quite an issue this month, and unless I get very much more granular in my overall review, we don't currently have an easy way to catch it.
+As of my compilation :  am integration bevauior is mismatched, because if any travcome invoice is updated then it should update in the netsuite without adding any line items it should change agent id but intste of that one line aitem is added with different batch id with same 104k amount.

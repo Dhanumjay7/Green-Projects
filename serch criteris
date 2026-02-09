@@ -1,13 +1,17 @@
 Hi Prabhat,
 
-As of findings about void Void in subsequent period when previous period is still open:
+As part of our findings on “Void in subsequent period when the previous period is still open”, here’s a brief summary:
 
-1.invoice posted correctly in June. 
-2.In July, there was an agent-only update that shouldn’t have affected money, but the integration resent it as a financial change.
-3.Since June was still open, NetSuite added revenue again in June and posted the offset in July. 
-4.So June looked too high and July too low, even though nothing really changed.
+The invoice was posted correctly in June.
 
-Note :  Invoice is created with two line items with different batch ids, so i thibk i need to check with micheal once in boome those batch ids avialble from  the trave come,so that we can find out thte issue.
+In July, there was an agent-only update that should not have impacted financials, but the integration resent it as a financial change.
 
-As of my compilation :  am integration bevauior is mismatched, because if any travcome invoice is updated then it should update in the netsuite without adding any line items it should change agent id but intste of that one line aitem is added with different batch id with same 104k amount.
+Since June was still open, NetSuite added the revenue again in June and posted the offsetting entry in July.
 
+As a result, June revenue appeared overstated and July understated, even though there was no actual financial change.
+
+Additional note:
+The invoice was created with two line items having different batch IDs. I believe we need to check with Michael in Boomi to confirm whether these batch IDs are coming from Travcom. This should help us identify the exact cause.
+
+My assessment:
+This appears to be an integration behavior mismatch. When a Travcom invoice is updated, NetSuite should update the existing record (for example, change the agent ID) without adding new line items. Instead, the integration is adding a new line item with a different batch ID but the same $104K amount, which is causing the revenue duplication.
